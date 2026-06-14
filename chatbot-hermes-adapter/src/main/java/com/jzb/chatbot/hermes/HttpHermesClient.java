@@ -8,6 +8,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.LinkedHashMap;
+import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -31,8 +32,8 @@ public class HttpHermesClient implements HermesClient {
     @Override
     public HermesResponse chat(HermesRequest request, HermesClientConfig config) {
         try {
-            var payload = buildPayload(request, config);
-            var httpRequest = buildRequest(config, payload);
+            var payload = buildPayload(request, config, false);
+            var httpRequest = buildRequest(config, payload, false);
             var response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 throw new IllegalStateException("Hermes HTTP " + response.statusCode() + ": " + response.body());
@@ -46,23 +47,46 @@ public class HttpHermesClient implements HermesClient {
         }
     }
 
-    private String buildPayload(HermesRequest request, HermesClientConfig config) throws IOException {
+    @Override
+    public Stream<String> streamChat(HermesRequest request, HermesClientConfig config) {
+        try {
+            var payload = buildPayload(request, config, true);
+            var httpRequest = buildRequest(config, payload, true);
+            var response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofLines());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                try (var lines = response.body()) {
+                    throw new IllegalStateException("Hermes HTTP " + response.statusCode() + ": " + String.join("\n", lines.toList()));
+                }
+            }
+            return response.body().map(line -> line + "\n");
+        } catch (IOException exception) {
+            throw new IllegalStateException("Hermes request failed", exception);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Hermes request interrupted", exception);
+        }
+    }
+
+    private String buildPayload(HermesRequest request, HermesClientConfig config, boolean stream) throws IOException {
         var payload = new LinkedHashMap<String, Object>();
         payload.put("model", config.model());
         payload.put("input", request.text());
         payload.put("store", true);
-        payload.put("stream", false);
+        payload.put("stream", stream);
         payload.put("conversation", request.conversationId().value());
         return objectMapper.writeValueAsString(payload);
     }
 
-    private HttpRequest buildRequest(HermesClientConfig config, String payload) {
+    private HttpRequest buildRequest(HermesClientConfig config, String payload, boolean stream) {
         var builder = HttpRequest.newBuilder()
                 .uri(URI.create(config.normalizedBaseUrl() + "/responses"))
                 .timeout(config.requestTimeout())
                 .header("Authorization", "Bearer " + config.apiKey())
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(payload));
+        if (stream) {
+            builder.header("Accept", "text/event-stream");
+        }
         var sessionKey = config.sanitizedSessionKey();
         if (!sessionKey.isBlank()) {
             builder.header("X-Hermes-Session-Key", sessionKey);

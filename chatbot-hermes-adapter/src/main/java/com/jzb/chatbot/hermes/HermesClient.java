@@ -1,5 +1,7 @@
 package com.jzb.chatbot.hermes;
 
+import java.util.stream.Stream;
+
 /**
  * Hermes 对话客户端边界。
  * <p>
@@ -18,4 +20,13 @@ public interface HermesClient {
      * @return Hermes 响应
      */
     HermesResponse chat(HermesRequest request, HermesClientConfig config);
+
+    /**
+     * 发送流式文本对话请求。
+     *
+     * @param request Hermes 请求
+     * @param config Hermes 客户端配置
+     * @return Hermes SSE 文本片段流
+     */
+    Stream<String> streamChat(HermesRequest request, HermesClientConfig config);
 }

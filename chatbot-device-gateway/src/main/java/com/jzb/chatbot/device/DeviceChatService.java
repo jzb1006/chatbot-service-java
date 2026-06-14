@@ -5,6 +5,7 @@ import com.jzb.chatbot.common.id.DeviceId;
 import com.jzb.chatbot.device.config.DeviceGatewayConfig;
 import com.jzb.chatbot.device.dto.DeviceChatRequest;
 import com.jzb.chatbot.device.dto.DeviceChatResponse;
+import com.jzb.chatbot.device.dto.DeviceChatStreamResponse;
 import com.jzb.chatbot.hermes.HermesClient;
 import com.jzb.chatbot.hermes.HermesRequest;
 import java.util.UUID;
@@ -42,6 +43,25 @@ public class DeviceChatService {
                 text
         ), config.hermesClientConfig());
         return new DeviceChatResponse(deviceId, hermesResponse.conversationId().value(), hermesResponse.text());
+    }
+
+    /**
+     * 处理设备文本流式聊天请求。
+     *
+     * @param request 设备请求
+     * @param config 网关配置
+     * @return 流式聊天响应
+     */
+    public DeviceChatStreamResponse streamChat(DeviceChatRequest request, DeviceGatewayConfig config) {
+        var deviceId = resolveDeviceId(request.deviceId());
+        var conversationId = resolveConversationId(request.conversationId());
+        var text = resolveText(request.text(), config);
+        var chunks = hermesClient.streamChat(new HermesRequest(
+                new DeviceId(deviceId),
+                new ConversationId(conversationId),
+                text
+        ), config.hermesClientConfig());
+        return new DeviceChatStreamResponse(deviceId, conversationId, chunks);
     }
 
     /**

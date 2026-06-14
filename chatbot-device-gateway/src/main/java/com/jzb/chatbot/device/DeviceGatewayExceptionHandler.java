@@ -2,6 +2,7 @@ package com.jzb.chatbot.device;
 
 import java.util.Map;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -25,7 +26,9 @@ public class DeviceGatewayExceptionHandler {
      */
     @ExceptionHandler(InvalidDeviceChatRequestException.class)
     public ResponseEntity<Map<String, String>> handleInvalidDeviceChatRequest(InvalidDeviceChatRequestException exception) {
-        return ResponseEntity.status(exception.status()).body(Map.of("error", exception.getMessage()));
+        return ResponseEntity.status(exception.status())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("error", exception.getMessage()));
     }
 
     /**
@@ -36,6 +39,8 @@ public class DeviceGatewayExceptionHandler {
      */
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<Map<String, String>> handleRuntimeException(RuntimeException exception) {
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of("error", exception.getMessage()));
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("error", exception.getMessage()));
     }
 }

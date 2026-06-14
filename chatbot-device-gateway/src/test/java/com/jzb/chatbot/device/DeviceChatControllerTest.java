@@ -2,13 +2,18 @@ package com.jzb.chatbot.device;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jzb.chatbot.device.config.DeviceGatewayConfig;
 import com.jzb.chatbot.device.config.DeviceGatewayConfigStore;
 import com.jzb.chatbot.device.dto.DeviceChatResponse;
+import com.jzb.chatbot.device.dto.DeviceChatStreamResponse;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -45,6 +50,67 @@ class DeviceChatControllerTest {
     }
 
     @Test
+    void shouldReturnStreamChatResponseWithConversationEvent() throws Exception {
+        given(configStore.get()).willReturn(DeviceGatewayConfig.defaults());
+        given(chatService.streamChat(any(), any())).willReturn(new DeviceChatStreamResponse(
+                "device-1",
+                "conv-1",
+                Stream.of("event: message\ndata: {\"answer\":\"pong\"}\n\n")
+        ));
+
+        var result = mockMvc.perform(post("/api/chat/stream")
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"device_id":"device-1","conversation_id":"conv-1","prompt":"ping"}
+                                """))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        mockMvc.perform(asyncDispatch(result))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM))
+                .andExpect(content().string("""
+                        event: conversation
+                        data: {"device_id":"device-1","conversation_id":"conv-1"}
+
+                        event: message
+                        data: {"answer":"pong"}
+
+                        """));
+    }
+
+    @Test
+    void shouldEscapeConversationEventJsonInStreamChatResponse() throws Exception {
+        given(configStore.get()).willReturn(DeviceGatewayConfig.defaults());
+        given(chatService.streamChat(any(), any())).willReturn(new DeviceChatStreamResponse(
+                "device\n1",
+                "conv\"1",
+                Stream.of("event: done\ndata: {}\n\n")
+        ));
+
+        var result = mockMvc.perform(post("/api/chat/stream")
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"device_id":"device-1","conversation_id":"conv-1","prompt":"ping"}
+                                """))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+
+        mockMvc.perform(asyncDispatch(result))
+                .andExpect(status().isOk())
+                .andExpect(content().string("""
+                        event: conversation
+                        data: {"device_id":"device\\n1","conversation_id":"conv\\"1"}
+
+                        event: done
+                        data: {}
+
+                        """));
+    }
+
+    @Test
     void shouldCreateConversationId() throws Exception {
         given(configStore.get()).willReturn(DeviceGatewayConfig.defaults());
         given(chatService.resolveDeviceId("device-1")).willReturn("device-1");
@@ -65,6 +131,20 @@ class DeviceChatControllerTest {
         given(configStore.get()).willReturn(DeviceGatewayConfig.defaults().withDeviceToken("expected-token"));
 
         mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"device_id":"device-1","conversation_id":"conv-1","prompt":"ping"}
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("device token required"));
+    }
+
+    @Test
+    void shouldRejectMissingDeviceTokenForStreamChatWhenConfigured() throws Exception {
+        given(configStore.get()).willReturn(DeviceGatewayConfig.defaults().withDeviceToken("expected-token"));
+
+        mockMvc.perform(post("/api/chat/stream")
+                        .accept(MediaType.TEXT_EVENT_STREAM)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"device_id":"device-1","conversation_id":"conv-1","prompt":"ping"}

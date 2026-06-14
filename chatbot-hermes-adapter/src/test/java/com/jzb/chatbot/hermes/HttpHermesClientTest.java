@@ -7,6 +7,7 @@ import com.jzb.chatbot.common.id.ConversationId;
 import com.jzb.chatbot.common.id.DeviceId;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
@@ -63,5 +64,47 @@ class HttpHermesClientTest {
         assertThat(receivedBody.get()).contains("\"model\":\"hermes-agent\"");
         assertThat(receivedBody.get()).contains("\"input\":\"ping\"");
         assertThat(receivedBody.get()).contains("\"conversation\":\"conv-1\"");
+    }
+
+    @Test
+    void shouldCallResponsesApiWithStreamEnabledAndReturnSseLines() throws Exception {
+        var receivedAccept = new AtomicReference<String>();
+        var receivedBody = new AtomicReference<String>();
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/responses", exchange -> {
+            receivedAccept.set(exchange.getRequestHeaders().getFirst("Accept"));
+            receivedBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            var body = """
+                    event: response.output_text.delta
+                    data: {"delta":"你"}
+
+                    event: response.completed
+                    data: {}
+
+                    """;
+            var bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "text/event-stream; charset=utf-8");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        var client = new HttpHermesClient(new ObjectMapper());
+
+        var chunks = client.streamChat(
+                new HermesRequest(new DeviceId("device-1"), new ConversationId("conv-1"), "ping"),
+                new HermesClientConfig(
+                        "http://127.0.0.1:" + server.getAddress().getPort() + "/v1/",
+                        "hermes-agent",
+                        "secret-key",
+                        Duration.ofSeconds(3),
+                        "owner"
+                )
+        ).toList();
+
+        assertThat(receivedAccept.get()).isEqualTo("text/event-stream");
+        assertThat(receivedBody.get()).contains("\"stream\":true");
+        assertThat(String.join("", chunks)).contains("event: response.output_text.delta");
+        assertThat(String.join("", chunks)).contains("data: {\"delta\":\"你\"}");
     }
 }
