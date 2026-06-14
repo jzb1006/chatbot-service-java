@@ -1,0 +1,11 @@
+server:
+  port: 8092
+spring:
+  threads:
+    virtual:
+      enabled: true
+chatbot:
+  hermes:
+    base-url: http://127.0.0.1:8765
+  voice:
+    default-voice-id: default
