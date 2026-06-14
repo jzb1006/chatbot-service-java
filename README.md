@@ -47,14 +47,36 @@ curl -s -X POST http://127.0.0.1:8766/api/chat \
 小智 ESP32 WebSocket 入口：
 
 ```text
-/xiaozhi/v1
+ws://<server-host>:8766/xiaozhi/v1
 ```
 
-建立连接后服务端会发送 `hello` 控制帧。第一阶段只支持 `listen.start` ack 和二进制音频帧接收日志。
+当前协议能力：
+
+- 设备发送 `hello` 后，服务端返回 `hello`，字段包含 `transport=websocket`、`session_id` 和 `audio_params`。
+- 支持 `listen.start`、`listen.stop`、`listen.detect`、`abort` 控制帧。
+- 支持 WebSocket binary v1/v2/v3 Opus 帧解包。
+- `listen.stop` 后使用 Fake ASR -> Hermes -> Fake TTS 完成最小闭环。
+- 下发 `stt`、`llm`、`tts.start`、`tts.sentence_start`、二进制音频帧、`tts.stop`。
+
+固件侧需要配置：
+
+```text
+websocket.url
+websocket.token
+websocket.version
+```
+
+MCP 边界：
+
+- Java 中间件不实现 MCP Server。
+- 收到 `type=mcp` 只记录并忽略。
+- Hermes 负责工具调用、编排和记忆。
+- 后续如需控制设备本身，只做 Hermes 与小智设备之间的薄透传桥。
 
 ## 暂不支持
 
 - 不接真实 ASR/TTS 厂商。
+- 不实现 Java 侧 MCP Server。
 - 不提供管理后台。
 - 不接 MySQL/Redis。
 - 不做 RAG、长期记忆存储和 OTA。

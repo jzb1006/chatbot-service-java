@@ -14,23 +14,20 @@ public record XiaozhiServerHello(
         String type,
         String transport,
         @JsonProperty("session_id") String sessionId,
-        @JsonProperty("conversation_id") String conversationId,
-        XiaozhiAudioParams audio
+        @JsonProperty("audio_params") XiaozhiAudioParams audioParams
 ) {
 
     /**
      * 创建 WebSocket hello 消息。
      *
      * @param sessionId 会话标识
-     * @param conversationId 对话标识
      * @return hello 消息
      */
-    public static XiaozhiServerHello websocket(String sessionId, String conversationId) {
+    public static XiaozhiServerHello websocket(String sessionId) {
         return new XiaozhiServerHello(
                 "hello",
                 "websocket",
                 sessionId,
-                conversationId,
                 XiaozhiAudioParams.defaults()
         );
     }

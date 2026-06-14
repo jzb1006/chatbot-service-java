@@ -76,7 +76,7 @@ Spring Boot 启动模块，聚合 REST、WebSocket、配置和健康检查。
 职责：
 
 - 接收小智 ESP32 WebSocket 连接。
-- 处理 `hello`、`listen`、`abort`、`iot` 等 JSON 控制帧。
+- 处理 `hello`、`listen`、`abort` 等 JSON 控制帧。
 - 接收二进制 Opus 音频帧。
 - 下发 `tts.start`、`tts.sentence_start`、音频帧、`tts.stop`。
 - 维护音频会话生命周期。
@@ -85,6 +85,14 @@ Spring Boot 启动模块，聚合 REST、WebSocket、配置和健康检查。
 
 - 不直接实现 Hermes 记忆。
 - 不把 ASR/TTS 厂商逻辑写死到 WebSocket Handler。
+- 不实现 Java 侧 MCP Server。
+
+MCP 边界：
+
+- MVP 不实现 Java 侧 MCP Server。
+- 收到 `type=mcp` 只记录并忽略。
+- Hermes 负责工具调用、编排和记忆。
+- 后续如需设备控制，仅实现 Hermes 与小智设备之间的薄透传桥。
 
 ### chatbot-hermes-adapter
 

@@ -1,6 +1,7 @@
 package com.jzb.chatbot.speech;
 
 import java.nio.ByteBuffer;
+import java.util.List;
 
 /**
  * 语音转文本客户端边界。
@@ -15,8 +16,8 @@ public interface SpeechToTextClient {
     /**
      * 将音频帧转成文本。
      *
-     * @param audio 音频数据
+     * @param audioFrames 音频帧
      * @return 识别文本
      */
-    String transcribe(ByteBuffer audio);
+    String transcribe(List<ByteBuffer> audioFrames);
 }

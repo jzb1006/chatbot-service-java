@@ -2,6 +2,7 @@ package com.jzb.chatbot.speech;
 
 import com.jzb.chatbot.common.id.VoiceId;
 import java.nio.ByteBuffer;
+import java.util.List;
 
 /**
  * 文本转语音客户端边界。
@@ -18,7 +19,7 @@ public interface TextToSpeechClient {
      *
      * @param text 文本内容
      * @param voiceId 音色标识
-     * @return 音频数据
+     * @return 音频帧
      */
-    ByteBuffer synthesize(String text, VoiceId voiceId);
+    List<ByteBuffer> synthesize(String text, VoiceId voiceId);
 }
