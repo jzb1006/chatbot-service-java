@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 public class FakeHermesClient implements HermesClient {
 
     @Override
-    public HermesResponse chat(HermesRequest request) {
+    public HermesResponse chat(HermesRequest request, HermesClientConfig config) {
         var text = "ping".equals(request.text()) ? "pong" : request.text();
         return new HermesResponse(request.conversationId(), text);
     }

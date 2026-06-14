@@ -1,11 +1,13 @@
 server:
-  port: 8092
+  port: 8766
 spring:
   threads:
     virtual:
       enabled: true
 chatbot:
+  device:
+    config-path: /app/data/llm_config.json
   hermes:
-    base-url: http://127.0.0.1:8765
+    base-url: http://hermes:8642/v1
   voice:
     default-voice-id: default

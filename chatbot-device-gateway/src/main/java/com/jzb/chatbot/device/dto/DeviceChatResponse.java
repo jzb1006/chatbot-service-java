@@ -11,7 +11,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
  * @since 2026-06-14 18:36:50
  */
 public record DeviceChatResponse(
+        @JsonProperty("device_id") String deviceId,
         @JsonProperty("conversation_id") String conversationId,
-        String reply
+        @JsonProperty("answer") String answer
 ) {
 }

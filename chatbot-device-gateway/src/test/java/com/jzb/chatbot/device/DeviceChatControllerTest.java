@@ -6,6 +6,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.jzb.chatbot.device.config.DeviceGatewayConfig;
+import com.jzb.chatbot.device.config.DeviceGatewayConfigStore;
 import com.jzb.chatbot.device.dto.DeviceChatResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,17 +25,113 @@ class DeviceChatControllerTest {
     @MockitoBean
     private DeviceChatService chatService;
 
+    @MockitoBean
+    private DeviceGatewayConfigStore configStore;
+
     @Test
-    void shouldReturnChatResponse() throws Exception {
-        given(chatService.chat(any())).willReturn(new DeviceChatResponse("conv-1", "pong"));
+    void shouldReturnChatResponseWithLegacyAnswerField() throws Exception {
+        given(configStore.get()).willReturn(DeviceGatewayConfig.defaults());
+        given(chatService.chat(any(), any())).willReturn(new DeviceChatResponse("device-1", "conv-1", "pong"));
 
         mockMvc.perform(post("/api/chat")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"device_id":"device-1","conversation_id":"conv-1","message":"ping"}
+                                {"device_id":"device-1","conversation_id":"conv-1","prompt":"ping"}
                                 """))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.device_id").value("device-1"))
                 .andExpect(jsonPath("$.conversation_id").value("conv-1"))
-                .andExpect(jsonPath("$.reply").value("pong"));
+                .andExpect(jsonPath("$.answer").value("pong"));
+    }
+
+    @Test
+    void shouldCreateConversationId() throws Exception {
+        given(configStore.get()).willReturn(DeviceGatewayConfig.defaults());
+        given(chatService.resolveDeviceId("device-1")).willReturn("device-1");
+        given(chatService.createConversationId()).willReturn("generated-conversation-id");
+
+        mockMvc.perform(post("/api/conversations/new")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"device_id":"device-1"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.device_id").value("device-1"))
+                .andExpect(jsonPath("$.conversation_id").isNotEmpty());
+    }
+
+    @Test
+    void shouldRejectMissingDeviceTokenWhenConfigured() throws Exception {
+        given(configStore.get()).willReturn(DeviceGatewayConfig.defaults().withDeviceToken("expected-token"));
+
+        mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"device_id":"device-1","conversation_id":"conv-1","prompt":"ping"}
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("device token required"));
+    }
+
+    @Test
+    void shouldRejectWrongDeviceTokenWhenConfigured() throws Exception {
+        given(configStore.get()).willReturn(DeviceGatewayConfig.defaults().withDeviceToken("expected-token"));
+
+        mockMvc.perform(post("/api/chat")
+                        .header("X-Device-Token", "wrong-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"device_id":"device-1","conversation_id":"conv-1","prompt":"ping"}
+                                """))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("device token required"));
+    }
+
+    @Test
+    void shouldRejectMissingPrompt() throws Exception {
+        given(configStore.get()).willReturn(DeviceGatewayConfig.defaults());
+        given(chatService.chat(any(), any())).willThrow(new InvalidDeviceChatRequestException(
+                org.springframework.http.HttpStatus.BAD_REQUEST,
+                "prompt is required"
+        ));
+
+        mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"device_id":"device-1","conversation_id":"conv-1"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("prompt is required"));
+    }
+
+    @Test
+    void shouldRejectTooLongPrompt() throws Exception {
+        given(configStore.get()).willReturn(DeviceGatewayConfig.defaults());
+        given(chatService.chat(any(), any())).willThrow(new InvalidDeviceChatRequestException(
+                org.springframework.http.HttpStatus.PAYLOAD_TOO_LARGE,
+                "prompt too long"
+        ));
+
+        mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"device_id":"device-1","conversation_id":"conv-1","prompt":"too-long"}
+                                """))
+                .andExpect(status().isPayloadTooLarge())
+                .andExpect(jsonPath("$.error").value("prompt too long"));
+    }
+
+    @Test
+    void shouldReturnJsonErrorWhenHermesFails() throws Exception {
+        given(configStore.get()).willReturn(DeviceGatewayConfig.defaults());
+        given(chatService.chat(any(), any())).willThrow(new IllegalStateException("Hermes HTTP 500: failed"));
+
+        mockMvc.perform(post("/api/chat")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"device_id":"device-1","conversation_id":"conv-1","prompt":"ping"}
+                                """))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.error").value("Hermes HTTP 500: failed"));
     }
 }

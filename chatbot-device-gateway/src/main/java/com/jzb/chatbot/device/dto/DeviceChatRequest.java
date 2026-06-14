@@ -13,6 +13,19 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 public record DeviceChatRequest(
         @JsonProperty("device_id") String deviceId,
         @JsonProperty("conversation_id") String conversationId,
+        String prompt,
         String message
 ) {
+
+    /**
+     * 返回兼容旧协议和第一阶段协议的文本内容。
+     *
+     * @return 设备输入文本
+     */
+    public String text() {
+        if (prompt != null && !prompt.isBlank()) {
+            return prompt;
+        }
+        return message;
+    }
 }

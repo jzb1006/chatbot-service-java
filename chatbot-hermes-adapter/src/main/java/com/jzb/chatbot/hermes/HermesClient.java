@@ -14,7 +14,8 @@ public interface HermesClient {
      * 发送文本对话请求。
      *
      * @param request Hermes 请求
+     * @param config Hermes 客户端配置
      * @return Hermes 响应
      */
-    HermesResponse chat(HermesRequest request);
+    HermesResponse chat(HermesRequest request, HermesClientConfig config);
 }

@@ -30,15 +30,16 @@ java -jar chatbot-bootstrap/target/chatbot-bootstrap-0.0.1-SNAPSHOT.jar
 ## REST 文本接口
 
 ```bash
-curl -s -X POST http://127.0.0.1:8092/api/chat \
+curl -s -X POST http://127.0.0.1:8766/api/chat \
   -H 'Content-Type: application/json' \
-  -d '{"device_id":"device-1","conversation_id":"conv-1","message":"ping"}'
+  -H 'X-Device-Token: <device-token>' \
+  -d '{"device_id":"device-1","conversation_id":"conv-1","prompt":"ping"}'
 ```
 
 预期响应：
 
 ```json
-{"conversation_id":"conv-1","reply":"pong"}
+{"device_id":"device-1","conversation_id":"conv-1","answer":"pong"}
 ```
 
 ## WebSocket
@@ -53,7 +54,6 @@ curl -s -X POST http://127.0.0.1:8092/api/chat \
 
 ## 暂不支持
 
-- 不接真实 Hermes 服务。
 - 不接真实 ASR/TTS 厂商。
 - 不提供管理后台。
 - 不接 MySQL/Redis。
