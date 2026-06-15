@@ -11,6 +11,19 @@ chatbot:
     base-url: http://hermes:8642/v1
   voice:
     default-voice-id: default
+    websocket:
+      token: ${XIAOZHI_WEBSOCKET_TOKEN:}
+    asr:
+      provider: ${CHATBOT_VOICE_ASR_PROVIDER:fake}
+      tencent:
+        secret-id: ${TENCENT_CLOUD_SECRET_ID:}
+        secret-key: ${TENCENT_CLOUD_SECRET_KEY:}
+        region: ap-guangzhou
+        endpoint: asr.tencentcloudapi.com
+        engine-model-type: ${TENCENT_CLOUD_ASR_ENGINE_MODEL_TYPE:16k_zh}
+        voice-format: opus
+        sample-rate: 16000
+        timeout-seconds: 15
     tts:
       provider: tencent
       tencent:

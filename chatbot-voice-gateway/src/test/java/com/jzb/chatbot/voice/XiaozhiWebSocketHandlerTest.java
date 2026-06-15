@@ -9,7 +9,11 @@ import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
+import java.net.URI;
 import java.time.Duration;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.http.HttpHeaders;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.CloseStatus;
@@ -20,7 +24,7 @@ class XiaozhiWebSocketHandlerTest {
     @Test
     void shouldNotSendHelloBeforeClientHello() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
-        var sessionService = newSessionService(codec);
+        var sessionService = newSessionService(codec, "");
         var handler = new XiaozhiWebSocketHandler(codec, sessionService);
         var session = new TestWebSocketSession("ws-session-1");
 
@@ -32,7 +36,7 @@ class XiaozhiWebSocketHandlerTest {
     @Test
     void shouldReplyServerHelloWhenClientHelloReceived() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
-        var sessionService = newSessionService(codec);
+        var sessionService = newSessionService(codec, "");
         var handler = new XiaozhiWebSocketHandler(codec, sessionService);
         var session = new TestWebSocketSession("ws-session-1");
         handler.afterConnectionEstablished(session);
@@ -62,7 +66,7 @@ class XiaozhiWebSocketHandlerTest {
     @Test
     void shouldNotSendAckWhenListenStartReceived() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
-        var sessionService = newSessionService(codec);
+        var sessionService = newSessionService(codec, "");
         var handler = new XiaozhiWebSocketHandler(codec, sessionService);
         var session = new TestWebSocketSession("ws-session-1");
         handler.afterConnectionEstablished(session);
@@ -98,7 +102,7 @@ class XiaozhiWebSocketHandlerTest {
     @Test
     void shouldCloseSessionWhenInvalidJsonReceived() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
-        var sessionService = newSessionService(codec);
+        var sessionService = newSessionService(codec, "");
         var handler = new XiaozhiWebSocketHandler(codec, sessionService);
         var session = new TestWebSocketSession("ws-session-1");
         handler.afterConnectionEstablished(session);
@@ -112,7 +116,7 @@ class XiaozhiWebSocketHandlerTest {
     @Test
     void shouldCloseSessionWhenInvalidBinaryFrameReceived() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
-        var sessionService = newSessionService(codec);
+        var sessionService = newSessionService(codec, "");
         var handler = new XiaozhiWebSocketHandler(codec, sessionService);
         var session = new TestWebSocketSession("ws-session-1");
         handler.afterConnectionEstablished(session);
@@ -140,7 +144,7 @@ class XiaozhiWebSocketHandlerTest {
     @Test
     void shouldRemoveSessionAfterConnectionClosed() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
-        var sessionService = newSessionService(codec);
+        var sessionService = newSessionService(codec, "");
         var handler = new XiaozhiWebSocketHandler(codec, sessionService);
         var session = new TestWebSocketSession("ws-session-1");
         handler.afterConnectionEstablished(session);
@@ -150,14 +154,75 @@ class XiaozhiWebSocketHandlerTest {
         assertThat(sessionService.getSession(session.getId())).isNull();
     }
 
-    private XiaozhiVoiceSessionService newSessionService(XiaozhiMessageCodec codec) {
+    @Test
+    void shouldCloseSessionWhenRequiredTokenIsMissing() throws Exception {
+        var codec = new XiaozhiMessageCodec(new ObjectMapper());
+        var sessionService = newSessionService(codec, "expected-token");
+        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var session = new TestWebSocketSession("ws-session-1");
+
+        handler.afterConnectionEstablished(session);
+
+        assertThat(session.isOpen()).isFalse();
+        assertThat(session.getCloseStatus()).isEqualTo(CloseStatus.POLICY_VIOLATION);
+        assertThat(sessionService.getSession(session.getId())).isNull();
+    }
+
+    @Test
+    void shouldCloseSessionWhenRequiredTokenDoesNotMatch() throws Exception {
+        var codec = new XiaozhiMessageCodec(new ObjectMapper());
+        var sessionService = newSessionService(codec, "expected-token");
+        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var headers = new HttpHeaders();
+        headers.setBearerAuth("wrong-token");
+        var session = new TestWebSocketSession(
+                "ws-session-1",
+                URI.create("ws://127.0.0.1/ws/xiaozhi/v1"),
+                headers
+        );
+
+        handler.afterConnectionEstablished(session);
+
+        assertThat(session.isOpen()).isFalse();
+        assertThat(session.getCloseStatus()).isEqualTo(CloseStatus.POLICY_VIOLATION);
+        assertThat(sessionService.getSession(session.getId())).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Bearer expected-token", "expected-token"})
+    void shouldAcceptBearerOrRawTokenWhenRequiredTokenMatches(String authorization) throws Exception {
+        var codec = new XiaozhiMessageCodec(new ObjectMapper());
+        var sessionService = newSessionService(codec, "expected-token");
+        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var headers = new HttpHeaders();
+        headers.set(HttpHeaders.AUTHORIZATION, authorization);
+        headers.set("Device-Id", "device-1");
+        headers.set("Client-Id", "client-1");
+        var session = new TestWebSocketSession(
+                "ws-session-1",
+                URI.create("ws://127.0.0.1/ws/xiaozhi/v1/"),
+                headers
+        );
+
+        handler.afterConnectionEstablished(session);
+
+        assertThat(session.isOpen()).isTrue();
+        assertThat(sessionService.getSession(session.getId()))
+                .satisfies(voiceSession -> {
+                    assertThat(voiceSession.deviceId()).isEqualTo("device-1");
+                    assertThat(voiceSession.clientId()).isEqualTo("client-1");
+                });
+    }
+
+    private XiaozhiVoiceSessionService newSessionService(XiaozhiMessageCodec codec, String expectedToken) {
         return new XiaozhiVoiceSessionService(
                 codec,
                 new FakeSpeechToTextClient(),
                 new FakeHermesClient(),
                 new FakeTextToSpeechClient(),
                 new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner")
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth(expectedToken)
         );
     }
 }

@@ -32,12 +32,18 @@ public class XiaozhiWebSocketHandler extends AbstractWebSocketHandler {
     private final XiaozhiVoiceSessionService sessionService;
 
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) {
-        sessionService.open(session);
+    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        if (!sessionService.open(session)) {
+            session.close(CloseStatus.POLICY_VIOLATION);
+        }
     }
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        if (sessionService.getSession(session.getId()) == null) {
+            log.debug("ignore xiaozhi control frame for unauthenticated session, sessionId={}", session.getId());
+            return;
+        }
         try {
             var clientMessage = codec.decodeText(message.getPayload());
             if (HELLO_TYPE.equals(clientMessage.type())) {
@@ -55,6 +61,10 @@ public class XiaozhiWebSocketHandler extends AbstractWebSocketHandler {
 
     @Override
     protected void handleBinaryMessage(WebSocketSession session, BinaryMessage message) {
+        if (sessionService.getSession(session.getId()) == null) {
+            log.debug("ignore xiaozhi binary frame for unauthenticated session, sessionId={}", session.getId());
+            return;
+        }
         try {
             log.debug("received xiaozhi binary audio frame, sessionId={}, bytes={}",
                     session.getId(), message.getPayloadLength());

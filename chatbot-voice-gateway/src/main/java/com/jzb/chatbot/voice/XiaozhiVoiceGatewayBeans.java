@@ -6,6 +6,8 @@ import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
 import com.jzb.chatbot.speech.SpeechToTextClient;
+import com.jzb.chatbot.speech.TencentCloudSpeechToTextClient;
+import com.jzb.chatbot.speech.TencentCloudSpeechToTextConfig;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechConfig;
 import com.jzb.chatbot.speech.TextToSpeechClient;
@@ -29,8 +31,40 @@ import org.springframework.context.annotation.Configuration;
 public class XiaozhiVoiceGatewayBeans {
 
     @Bean
-    SpeechToTextClient speechToTextClient() {
-        return new FakeSpeechToTextClient();
+    XiaozhiVoiceTokenAuth xiaozhiVoiceTokenAuth(
+            @Value("${chatbot.voice.websocket.token:}") String expectedToken
+    ) {
+        return new XiaozhiVoiceTokenAuth(expectedToken);
+    }
+
+    @Bean
+    SpeechToTextClient speechToTextClient(
+            @Value("${chatbot.voice.asr.provider:fake}") String provider,
+            @Value("${chatbot.voice.asr.tencent.secret-id:}") String secretId,
+            @Value("${chatbot.voice.asr.tencent.secret-key:}") String secretKey,
+            @Value("${chatbot.voice.asr.tencent.region:ap-guangzhou}") String region,
+            @Value("${chatbot.voice.asr.tencent.endpoint:asr.tencentcloudapi.com}") String endpoint,
+            @Value("${chatbot.voice.asr.tencent.engine-model-type:16k_zh}") String engineModelType,
+            @Value("${chatbot.voice.asr.tencent.voice-format:opus}") String voiceFormat,
+            @Value("${chatbot.voice.asr.tencent.sample-rate:16000}") int sampleRate,
+            @Value("${chatbot.voice.asr.tencent.timeout-seconds:15}") int timeoutSeconds
+    ) {
+        if (!"tencent".equalsIgnoreCase(provider)) {
+            return new FakeSpeechToTextClient();
+        }
+        if (secretId.isBlank() || secretKey.isBlank()) {
+            throw new IllegalStateException("Tencent Cloud ASR requires secret-id and secret-key");
+        }
+        return new TencentCloudSpeechToTextClient(new TencentCloudSpeechToTextConfig(
+                secretId,
+                secretKey,
+                region,
+                endpoint,
+                engineModelType,
+                voiceFormat,
+                sampleRate,
+                Duration.ofSeconds(timeoutSeconds)
+        ));
     }
 
     @Bean

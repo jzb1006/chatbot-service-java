@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.common.id.ConversationId;
+import com.jzb.chatbot.common.id.VoiceId;
 import com.jzb.chatbot.hermes.FakeHermesClient;
 import com.jzb.chatbot.hermes.HermesClient;
 import com.jzb.chatbot.hermes.HermesClientConfig;
@@ -11,6 +12,8 @@ import com.jzb.chatbot.hermes.HermesRequest;
 import com.jzb.chatbot.hermes.HermesResponse;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
+import com.jzb.chatbot.speech.SpeechToTextClient;
+import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientHello;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
@@ -19,6 +22,7 @@ import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
 import java.nio.ByteBuffer;
 import java.net.URI;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -35,7 +39,8 @@ class XiaozhiVoiceSessionServiceTest {
             new FakeHermesClient(),
             new FakeTextToSpeechClient(),
             new XiaozhiServerEventFactory(new ObjectMapper()),
-            new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner")
+            new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+            new XiaozhiVoiceTokenAuth("")
     );
 
     @Test
@@ -147,7 +152,8 @@ class XiaozhiVoiceSessionServiceTest {
                 hermesClient,
                 new FakeTextToSpeechClient(),
                 new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner")
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth("")
         );
         var headers = new HttpHeaders();
         headers.set("Device-Id", "aa:bb:cc:dd:ee:ff");
@@ -177,7 +183,152 @@ class XiaozhiVoiceSessionServiceTest {
         assertThat(hermesClient.request().conversationId().value()).isEqualTo("conv-aa:bb:cc:dd:ee:ff");
     }
 
+    @Test
+    void shouldSkipHermesAndReturnIdleWhenAsrTextIsBlank() {
+        var hermesClient = new CapturingHermesClient();
+        var serviceWithBlankAsr = new XiaozhiVoiceSessionService(
+                codec,
+                audioFrames -> " ",
+                hermesClient,
+                new FakeTextToSpeechClient(),
+                new XiaozhiServerEventFactory(new ObjectMapper()),
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth("")
+        );
+        var session = openSession(serviceWithBlankAsr);
+
+        serviceWithBlankAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithBlankAsr.handleBinary(session, ByteBuffer.wrap(new byte[] {1, 2, 3}));
+        serviceWithBlankAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(hermesClient.request()).isNull();
+        assertThat(serviceWithBlankAsr.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+        assertThat(session.getSentMessages()).isEmpty();
+    }
+
+    @Test
+    void shouldReturnIdleWhenHermesFails() {
+        var serviceWithFailingHermes = new XiaozhiVoiceSessionService(
+                codec,
+                new FakeSpeechToTextClient(),
+                new FailingHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiServerEventFactory(new ObjectMapper()),
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth("")
+        );
+        var session = openSession(serviceWithFailingHermes);
+        serviceWithFailingHermes.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithFailingHermes.handleBinary(session, ByteBuffer.wrap(new byte[] {1, 2, 3}));
+
+        serviceWithFailingHermes.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(serviceWithFailingHermes.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"stt\"", "\"text\":\"ping\""));
+    }
+
+    @Test
+    void shouldSendTtsStopWhenSynthesizedAudioIsEmpty() {
+        var serviceWithEmptyTts = new XiaozhiVoiceSessionService(
+                codec,
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                new EmptyTextToSpeechClient(),
+                new XiaozhiServerEventFactory(new ObjectMapper()),
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth("")
+        );
+        var session = openSession(serviceWithEmptyTts);
+        serviceWithEmptyTts.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithEmptyTts.handleBinary(session, ByteBuffer.wrap(new byte[] {1, 2, 3}));
+
+        serviceWithEmptyTts.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(session.getSentMessages()).noneSatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"stop\""));
+        assertThat(serviceWithEmptyTts.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
+    @Test
+    void shouldSendTtsStopWhenTextToSpeechFailsAfterTtsStart() {
+        var serviceWithFailingTts = new XiaozhiVoiceSessionService(
+                codec,
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FailingTextToSpeechClient(),
+                new XiaozhiServerEventFactory(new ObjectMapper()),
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth("")
+        );
+        var session = openSession(serviceWithFailingTts);
+        serviceWithFailingTts.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithFailingTts.handleBinary(session, ByteBuffer.wrap(new byte[] {1, 2, 3}));
+
+        serviceWithFailingTts.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"start\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"stop\""));
+        assertThat(serviceWithFailingTts.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
+    @Test
+    void shouldIgnoreBinaryFrameOutsideListeningState() {
+        var recordingSpeech = new RecordingSpeechToTextClient();
+        var serviceWithRecordingSpeech = new XiaozhiVoiceSessionService(
+                codec,
+                recordingSpeech,
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiServerEventFactory(new ObjectMapper()),
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth("")
+        );
+        var session = openSession(serviceWithRecordingSpeech);
+
+        serviceWithRecordingSpeech.handleBinary(session, ByteBuffer.wrap(new byte[] {9, 9, 9}));
+        serviceWithRecordingSpeech.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithRecordingSpeech.handleBinary(session, ByteBuffer.wrap(new byte[] {1, 2, 3}));
+        serviceWithRecordingSpeech.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(recordingSpeech.audioFramePayloads())
+                .singleElement()
+                .isEqualTo(List.of(1, 2, 3));
+    }
+
     private TestWebSocketSession openSession() {
+        return openSession(service);
+    }
+
+    private TestWebSocketSession openSession(XiaozhiVoiceSessionService service) {
         var session = new TestWebSocketSession("ws-session-1");
         service.open(session);
         service.handleHello(session, new XiaozhiClientHello(
@@ -207,6 +358,61 @@ class XiaozhiVoiceSessionServiceTest {
 
         private HermesRequest request() {
             return request;
+        }
+    }
+
+    private static class FailingHermesClient implements HermesClient {
+
+        @Override
+        public HermesResponse chat(HermesRequest request, HermesClientConfig config) {
+            throw new IllegalStateException("hermes unavailable");
+        }
+
+        @Override
+        public Stream<String> streamChat(HermesRequest request, HermesClientConfig config) {
+            return Stream.of();
+        }
+    }
+
+    private static class EmptyTextToSpeechClient implements TextToSpeechClient {
+
+        @Override
+        public List<ByteBuffer> synthesize(String text, VoiceId voiceId) {
+            return List.of();
+        }
+    }
+
+    private static class FailingTextToSpeechClient implements TextToSpeechClient {
+
+        @Override
+        public List<ByteBuffer> synthesize(String text, VoiceId voiceId) {
+            throw new IllegalStateException("tts unavailable");
+        }
+    }
+
+    private static class RecordingSpeechToTextClient implements SpeechToTextClient {
+
+        private List<List<Integer>> audioFramePayloads = List.of();
+
+        @Override
+        public String transcribe(List<ByteBuffer> audioFrames) {
+            audioFramePayloads = audioFrames.stream()
+                    .map(RecordingSpeechToTextClient::toUnsignedBytes)
+                    .toList();
+            return "ping";
+        }
+
+        private List<List<Integer>> audioFramePayloads() {
+            return audioFramePayloads;
+        }
+
+        private static List<Integer> toUnsignedBytes(ByteBuffer buffer) {
+            var input = buffer.slice();
+            var values = new java.util.ArrayList<Integer>();
+            while (input.hasRemaining()) {
+                values.add(Byte.toUnsignedInt(input.get()));
+            }
+            return List.copyOf(values);
         }
     }
 }
