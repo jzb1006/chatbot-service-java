@@ -75,10 +75,31 @@ MCP 边界：
 
 ## 暂不支持
 
-- 不接真实 ASR/TTS 厂商。
+- 不接真实 ASR 厂商。
 - 不实现 Java 侧 MCP Server。
 - 不提供管理后台。
 - 不接 MySQL/Redis。
 - 不做 RAG、长期记忆存储和 OTA。
 - 不做声纹识别。
 - 不迁移固件代码。
+
+## 腾讯云 TTS
+
+默认使用腾讯云语音合成。部署时需要提供腾讯云密钥，本地协议调试或测试可将 `chatbot.voice.tts.provider` 覆盖为 `fake`。
+
+```yaml
+chatbot:
+  voice:
+    tts:
+      provider: tencent
+      tencent:
+        secret-id: ${TENCENT_CLOUD_SECRET_ID}
+        secret-key: ${TENCENT_CLOUD_SECRET_KEY}
+        region: ap-guangzhou
+        endpoint: tts.tencentcloudapi.com
+        voice-type: "101001"
+        codec: pcm
+        sample-rate: 16000
+```
+
+腾讯云返回 PCM，服务端会编码成小智 WebSocket 使用的 Opus 帧后发送给设备。

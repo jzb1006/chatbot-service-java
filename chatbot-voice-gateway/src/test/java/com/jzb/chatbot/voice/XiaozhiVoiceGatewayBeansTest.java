@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.hermes.HermesClientConfig;
+import com.jzb.chatbot.speech.FakeTextToSpeechClient;
+import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
+import com.jzb.chatbot.speech.TextToSpeechClient;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -46,6 +49,30 @@ class XiaozhiVoiceGatewayBeansTest {
                     assertThat(config.model()).isEqualTo("hermes-agent");
                     assertThat(config.apiKey()).isEqualTo("real-hermes-key");
                     assertThat(config.sessionKey()).isEqualTo("owner");
+                });
+    }
+
+    @Test
+    void shouldUseFakeTextToSpeechByDefault() {
+        contextRunner.run(context -> {
+            var client = context.getBean(TextToSpeechClient.class);
+
+            assertThat(client).isInstanceOf(FakeTextToSpeechClient.class);
+        });
+    }
+
+    @Test
+    void shouldUseTencentTextToSpeechWhenConfigured() {
+        contextRunner
+                .withPropertyValues(
+                        "chatbot.voice.tts.provider=tencent",
+                        "chatbot.voice.tts.tencent.secret-id=secret-id",
+                        "chatbot.voice.tts.tencent.secret-key=secret-key"
+                )
+                .run(context -> {
+                    var client = context.getBean(TextToSpeechClient.class);
+
+                    assertThat(client).isInstanceOf(TencentCloudTextToSpeechClient.class);
                 });
     }
 }

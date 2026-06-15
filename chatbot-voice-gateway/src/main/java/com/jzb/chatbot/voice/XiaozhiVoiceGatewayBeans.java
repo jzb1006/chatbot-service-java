@@ -6,6 +6,8 @@ import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
 import com.jzb.chatbot.speech.SpeechToTextClient;
+import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
+import com.jzb.chatbot.speech.TencentCloudTextToSpeechConfig;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -32,8 +34,33 @@ public class XiaozhiVoiceGatewayBeans {
     }
 
     @Bean
-    TextToSpeechClient textToSpeechClient() {
-        return new FakeTextToSpeechClient();
+    TextToSpeechClient textToSpeechClient(
+            @Value("${chatbot.voice.tts.provider:fake}") String provider,
+            @Value("${chatbot.voice.tts.tencent.secret-id:}") String secretId,
+            @Value("${chatbot.voice.tts.tencent.secret-key:}") String secretKey,
+            @Value("${chatbot.voice.tts.tencent.region:ap-guangzhou}") String region,
+            @Value("${chatbot.voice.tts.tencent.endpoint:tts.tencentcloudapi.com}") String endpoint,
+            @Value("${chatbot.voice.tts.tencent.voice-type:101001}") String voiceType,
+            @Value("${chatbot.voice.tts.tencent.codec:pcm}") String codec,
+            @Value("${chatbot.voice.tts.tencent.sample-rate:16000}") int sampleRate,
+            @Value("${chatbot.voice.tts.tencent.timeout-seconds:15}") int timeoutSeconds
+    ) {
+        if (!"tencent".equalsIgnoreCase(provider)) {
+            return new FakeTextToSpeechClient();
+        }
+        if (secretId.isBlank() || secretKey.isBlank()) {
+            throw new IllegalStateException("Tencent Cloud TTS requires secret-id and secret-key");
+        }
+        return new TencentCloudTextToSpeechClient(new TencentCloudTextToSpeechConfig(
+                secretId,
+                secretKey,
+                region,
+                endpoint,
+                voiceType,
+                codec,
+                sampleRate,
+                Duration.ofSeconds(timeoutSeconds)
+        ));
     }
 
     @Bean

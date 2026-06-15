@@ -11,3 +11,14 @@ chatbot:
     base-url: http://hermes:8642/v1
   voice:
     default-voice-id: default
+    tts:
+      provider: tencent
+      tencent:
+        secret-id: ${TENCENT_CLOUD_SECRET_ID:}
+        secret-key: ${TENCENT_CLOUD_SECRET_KEY:}
+        region: ap-guangzhou
+        endpoint: tts.tencentcloudapi.com
+        voice-type: "101001"
+        codec: pcm
+        sample-rate: 16000
+        timeout-seconds: 15
