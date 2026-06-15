@@ -36,6 +36,11 @@ import org.springframework.web.socket.WebSocketSession;
 @RequiredArgsConstructor
 public class XiaozhiVoiceSessionService {
 
+    private static final String AUTHORIZATION_HEADER = "Authorization";
+    private static final String PROTOCOL_VERSION_HEADER = "Protocol-Version";
+    private static final String DEVICE_ID_HEADER = "Device-Id";
+    private static final String CLIENT_ID_HEADER = "Client-Id";
+
     private final XiaozhiMessageCodec codec;
     private final SpeechToTextClient speechToTextClient;
     private final HermesClient hermesClient;
@@ -50,7 +55,15 @@ public class XiaozhiVoiceSessionService {
      * @param session WebSocket 会话
      */
     public void open(WebSocketSession session) {
-        sessions.put(session.getId(), new XiaozhiVoiceSession(session.getId()));
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+        var headers = session.getHandshakeHeaders();
+        voiceSession.updateHandshake(
+                headers.getFirst(AUTHORIZATION_HEADER),
+                headers.getFirst(DEVICE_ID_HEADER),
+                headers.getFirst(CLIENT_ID_HEADER),
+                parseProtocolVersion(headers.getFirst(PROTOCOL_VERSION_HEADER))
+        );
+        sessions.put(session.getId(), voiceSession);
     }
 
     /**
@@ -136,8 +149,8 @@ public class XiaozhiVoiceSessionService {
             webSocketSession.sendMessage(new TextMessage(eventFactory.stt(voiceSession.sessionId(), userText)));
 
             var response = hermesClient.chat(new HermesRequest(
-                    new DeviceId(webSocketSession.getId()),
-                    new ConversationId("conv-" + webSocketSession.getId()),
+                    new DeviceId(voiceSession.deviceId()),
+                    new ConversationId("conv-" + voiceSession.deviceId()),
                     userText
             ), hermesClientConfig);
             var reply = response.text();
@@ -153,6 +166,17 @@ public class XiaozhiVoiceSessionService {
             voiceSession.markIdle();
         } catch (IOException exception) {
             throw new IllegalStateException("Failed to send xiaozhi websocket message", exception);
+        }
+    }
+
+    private int parseProtocolVersion(String value) {
+        if (value == null || value.isBlank()) {
+            return 1;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException exception) {
+            return 1;
         }
     }
 }

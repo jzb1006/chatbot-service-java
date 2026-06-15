@@ -28,6 +28,9 @@ public class XiaozhiVoiceSession {
     private final List<XiaozhiAudioFrame> audioFrames = new ArrayList<>();
     private State state = State.IDLE;
     private int protocolVersion = 1;
+    private String authorization;
+    private String deviceId;
+    private String clientId;
 
     public XiaozhiVoiceSession(String sessionId) {
         this.sessionId = sessionId;
@@ -45,8 +48,27 @@ public class XiaozhiVoiceSession {
         return protocolVersion;
     }
 
+    public String authorization() {
+        return authorization;
+    }
+
+    public String deviceId() {
+        return deviceId == null || deviceId.isBlank() ? sessionId : deviceId;
+    }
+
+    public String clientId() {
+        return clientId;
+    }
+
     public void updateProtocolVersion(int protocolVersion) {
         this.protocolVersion = protocolVersion <= 0 ? 1 : protocolVersion;
+    }
+
+    public void updateHandshake(String authorization, String deviceId, String clientId, int protocolVersion) {
+        this.authorization = blankToNull(authorization);
+        this.deviceId = blankToNull(deviceId);
+        this.clientId = blankToNull(clientId);
+        updateProtocolVersion(protocolVersion);
     }
 
     public void markListening() {
@@ -75,5 +97,9 @@ public class XiaozhiVoiceSession {
         var frames = List.copyOf(audioFrames);
         audioFrames.clear();
         return frames;
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 }

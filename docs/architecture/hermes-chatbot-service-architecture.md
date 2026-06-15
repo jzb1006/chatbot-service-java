@@ -135,7 +135,7 @@ ESP32 Arduino 固件
 
 ```text
 小智 ESP32 固件
-  -> WebSocket /xiaozhi/v1
+  -> WebSocket /xiaozhi/v1 或 /ws/xiaozhi/v1/
   -> XiaozhiWebSocketHandler
   -> AudioSession
   -> SpeechToTextClient

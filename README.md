@@ -48,7 +48,12 @@ curl -s -X POST http://127.0.0.1:8766/api/chat \
 
 ```text
 ws://<server-host>:8766/xiaozhi/v1
+ws://<server-host>:8766/ws/xiaozhi/v1
+ws://<server-host>:8766/ws/xiaozhi/v1/
 ```
+
+推荐继续使用 `/xiaozhi/v1` 作为当前项目主路径；`/ws/xiaozhi/v1` 和 `/ws/xiaozhi/v1/`
+用于兼容小智固件常见配置和参考服务端路径。
 
 当前协议能力：
 
@@ -57,14 +62,19 @@ ws://<server-host>:8766/xiaozhi/v1
 - 支持 WebSocket binary v1/v2/v3 Opus 帧解包。
 - `listen.stop` 后使用 Fake ASR -> Hermes -> Fake TTS 完成最小闭环。
 - 下发 `stt`、`llm`、`tts.start`、`tts.sentence_start`、二进制音频帧、`tts.stop`。
+- 握手时读取小智固件请求头：`Authorization`、`Protocol-Version`、`Device-Id`、`Client-Id`。
+- Hermes 请求优先使用 `Device-Id` 作为设备标识，缺失时回退到 WebSocket session id。
 
 固件侧需要配置：
 
 ```text
-websocket.url
-websocket.token
-websocket.version
+websocket.url=ws://<server-host>:8766/xiaozhi/v1
+websocket.token=<device-token>
+websocket.version=1
 ```
+
+`websocket.token` 会由固件转换为 `Authorization: Bearer <token>`；当前版本已保存该头部，
+但还未执行强制鉴权，真实 token 校验仍属于后续任务。
 
 MCP 边界：
 

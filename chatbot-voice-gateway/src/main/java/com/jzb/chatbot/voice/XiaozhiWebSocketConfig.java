@@ -19,10 +19,16 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 @RequiredArgsConstructor
 public class XiaozhiWebSocketConfig implements WebSocketConfigurer {
 
+    private static final String[] XIAOZHI_PATHS = {
+            "/xiaozhi/v1",
+            "/ws/xiaozhi/v1",
+            "/ws/xiaozhi/v1/"
+    };
+
     private final XiaozhiWebSocketHandler handler;
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(handler, "/xiaozhi/v1").setAllowedOrigins("*");
+        registry.addHandler(handler, XIAOZHI_PATHS).setAllowedOrigins("*");
     }
 }

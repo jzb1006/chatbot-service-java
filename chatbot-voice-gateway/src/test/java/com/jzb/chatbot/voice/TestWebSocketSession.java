@@ -17,6 +17,8 @@ import org.springframework.web.socket.WebSocketSession;
 class TestWebSocketSession implements WebSocketSession {
 
     private final String id;
+    private final URI uri;
+    private final HttpHeaders handshakeHeaders;
     private final Map<String, Object> attributes = new HashMap<>();
     private final List<WebSocketMessage<?>> sentMessages = new ArrayList<>();
     private CloseStatus closeStatus;
@@ -24,6 +26,14 @@ class TestWebSocketSession implements WebSocketSession {
 
     TestWebSocketSession(String id) {
         this.id = id;
+        this.uri = URI.create("ws://127.0.0.1/xiaozhi/v1");
+        this.handshakeHeaders = HttpHeaders.EMPTY;
+    }
+
+    TestWebSocketSession(String id, URI uri, HttpHeaders handshakeHeaders) {
+        this.id = id;
+        this.uri = uri;
+        this.handshakeHeaders = HttpHeaders.readOnlyHttpHeaders(handshakeHeaders);
     }
 
     List<WebSocketMessage<?>> getSentMessages() {
@@ -41,12 +51,12 @@ class TestWebSocketSession implements WebSocketSession {
 
     @Override
     public URI getUri() {
-        return URI.create("ws://127.0.0.1/xiaozhi/v1");
+        return uri;
     }
 
     @Override
     public HttpHeaders getHandshakeHeaders() {
-        return HttpHeaders.EMPTY;
+        return handshakeHeaders;
     }
 
     @Override
