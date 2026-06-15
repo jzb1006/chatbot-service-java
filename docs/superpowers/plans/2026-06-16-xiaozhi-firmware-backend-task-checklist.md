@@ -30,8 +30,8 @@
 - [x] WebSocket binary v1/v2/v3 Opus 帧解包已有测试覆盖。
 - [x] Fake ASR / Fake TTS 可支撑本地协议闭环测试。
 - [x] 腾讯云 TTS 已接入，服务器上已配置腾讯云参数。
-- [ ] WebSocket token 只保存，尚未强制鉴权。
-- [ ] ASR 首版已确定使用腾讯云，但当前仍是 Fake 实现，尚不能识别真实语音。
+- [x] WebSocket token 已支持通过配置强制鉴权，兼容 `Bearer <token>` 和纯 token。
+- [x] ASR 首版已接入腾讯云一句话识别 Provider，默认仍保留 Fake 回退；真实云识别待部署配置后验证。
 - [ ] 腾讯云 TTS 尚未完成小智真机播放验收。
 - [ ] OTA / 激活配置接口尚未实现。
 - [ ] MCP 目前只记录并忽略，尚未做 Hermes 到设备的薄透传。
@@ -41,7 +41,7 @@
 | 类别 | 当前状态 | 对执行的影响 | 处理方式 |
 |------|----------|--------------|----------|
 | 硬件真机 | 未在本文档中确认可用 | 阻塞真机播放、唤醒、麦克风、扬声器验收 | 第一轮先做本地和公网 WebSocket smoke |
-| ASR Provider | 首版已确定使用腾讯云 | 不再阻塞选型；阻塞点转为腾讯云 ASR 实现和配置 | 参考 TTS Provider 模式实现 `chatbot.voice.asr.provider=tencent` |
+| ASR Provider | 已实现腾讯云一句话识别 Provider | 不再阻塞服务端代码；阻塞点转为云参数和真实音频识别验证 | 配置 `chatbot.voice.asr.provider=tencent` 后使用腾讯云 |
 | TTS 配置 | 腾讯云 TTS 已接入且服务器已配置 | 不再阻塞服务端实现；仍需验证真机播放 | 保留 Fake 回退，硬件到位后做播放验收 |
 | WebSocket token 来源 | 需要服务端配置来源 | 阻塞强制鉴权 | 第一轮用环境变量或现有设备配置做最小实现 |
 | OTA 是否需要 | 未决定 | 不阻塞手工配置固件联调 | 首版默认手工配置，OTA 作为可选任务 |
@@ -80,6 +80,7 @@
 ### Sprint 1.1：WebSocket token 鉴权
 
 - 对应任务：任务 2.1。
+- 当前状态：已完成本地实现与自动化测试；公网 smoke 和真机连接待部署后执行。
 - 推荐实现：使用配置项提供服务端期望 token；固件侧 `websocket.token` 经 `Authorization: Bearer <token>` 传入。
 - 最小范围：
   - 校验 `Authorization` 是否存在。
@@ -95,6 +96,7 @@
 ### Sprint 1.2：运行观测日志
 
 - 对应任务：任务 3.2。
+- 当前状态：已完成本地实现；日志覆盖连接、hello、listen、回合耗时、空 ASR、Hermes/TTS 异常和非法 binary frame。
 - 推荐实现：在 `XiaozhiWebSocketHandler` 和 `XiaozhiVoiceSessionService` 增加关键节点日志。
 - 最小范围：
   - 连接建立：session id、device id、client id、protocol version。
@@ -108,6 +110,7 @@
 ### Sprint 1.3：真实闭环失败路径测试
 
 - 对应任务：任务 1.3。
+- 当前状态：已完成自动化测试；真实 ASR 和真机播放仍依赖后续条件。
 - 推荐实现：继续保留 Fake ASR/TTS，补异常分支测试，不引入真实厂商依赖。
 - 最小范围：
   - ASR 返回空文本时不调用 Hermes，并给出可定位日志。
@@ -121,6 +124,7 @@
 ### Sprint 1.4：联调脚本与公网 smoke
 
 - 对应任务：任务 2.3 的软件预演部分。
+- 当前状态：已新增标准库 Python smoke 脚本；本地服务已通过，公网服务待部署后执行。
 - 推荐实现：新增或完善一个本地 WebSocket smoke 脚本，模拟固件握手头和控制帧。
 - 最小范围：
   - 支持 `/xiaozhi/v1`、`/ws/xiaozhi/v1`、`/ws/xiaozhi/v1/` 三个路径。
@@ -176,12 +180,12 @@ mvn -pl chatbot-voice-gateway -am test
 
 ### 阶段 1：基础语音闭环补齐
 
-- [ ] **任务 1.1：接入腾讯云 ASR Provider**
+- [x] **任务 1.1：接入腾讯云 ASR Provider**
   - 目标：替换当前 `FakeSpeechToTextClient`，让设备真实语音可以转成文本。
   - 输入：小智固件上行 Opus 音频帧、腾讯云 ASR 配置、音频解码/转码结果。
   - 输出：`SpeechToTextClient` 的腾讯云实现。
-  - 当前状态：可执行；ASR 首版已确定使用腾讯云，实现方式参考当前腾讯云 TTS。
-  - 依赖条件：腾讯云 ASR 参数和服务端配置；如复用现有腾讯云账号，则按 TTS 配置命名方式补充 ASR 配置。
+  - 当前状态：已完成 Provider、配置、Bean 装配和单元测试；真实云识别待部署配置后验证。
+  - 依赖条件：腾讯云 ASR 参数和真实小智音频样本；如复用现有腾讯云账号，则设置对应环境变量。
   - 涉及文件：
     - `chatbot-speech-api/src/main/java/com/jzb/chatbot/speech/SpeechToTextClient.java`
     - `chatbot-speech-api/src/main/java/com/jzb/chatbot/speech/TencentCloudSpeechToTextClient.java`
@@ -201,7 +205,7 @@ mvn -pl chatbot-voice-gateway -am test
     - `chatbot.voice.asr.tencent.endpoint`
     - `chatbot.voice.asr.tencent.sample-rate=16000`
   - 验收标准：
-    - WebSocket 收到设备音频后，ASR 返回真实用户语音文本。
+    - WebSocket 收到设备音频后，ASR 返回真实用户语音文本。（待部署配置和真实音频验证）
     - 保留 Fake ASR 作为本地测试回退通道。
     - `chatbot.voice.asr.provider=fake` 时不访问腾讯云。
     - `chatbot.voice.asr.provider=tencent` 且密钥缺失时启动失败信息明确。
@@ -231,11 +235,11 @@ mvn -pl chatbot-voice-gateway -am test
     - `mvn -pl chatbot-speech-api -am test` 和 `mvn -pl chatbot-voice-gateway -am test` 通过。
   - 预估工作量：0.5-1 天。
 
-- [ ] **任务 1.3：补充真实闭环测试**
+- [x] **任务 1.3：补充真实闭环测试**
   - 目标：覆盖 `listen.start -> binary audio -> listen.stop -> ASR -> Hermes -> TTS` 主流程。
   - 输入：测试音频帧、Fake Hermes、Fake/真实 Speech Provider。
   - 输出：自动化测试和联调脚本。
-  - 当前状态：可执行，优先进入第一轮 Sprint。
+  - 当前状态：已完成自动化测试和联调脚本。
   - 依赖条件：无外部依赖。
   - 涉及文件：
     - `chatbot-voice-gateway/src/test/java/com/jzb/chatbot/voice/XiaozhiVoiceSessionServiceTest.java`
@@ -248,12 +252,12 @@ mvn -pl chatbot-voice-gateway -am test
 
 ### 阶段 2：真机连接与安全接入
 
-- [ ] **任务 2.1：实现 WebSocket 鉴权**
+- [x] **任务 2.1：实现 WebSocket 鉴权**
   - 目标：校验小智固件握手时携带的 `Authorization` 或等价 token。
   - 输入：固件侧 `websocket.token`、服务端配置文件中的 device token。
   - 输出：WebSocket 握手拦截与认证逻辑。
-  - 当前状态：可执行，优先进入第一轮 Sprint；已读取并保存 `Authorization`，但暂未强制校验 token。
-  - 依赖条件：确认 token 配置来源；首版推荐使用环境变量或现有设备配置。
+  - 当前状态：已完成本地实现与自动化测试；配置 `chatbot.voice.websocket.token` 后强制校验 token。
+  - 依赖条件：首版使用环境变量 `XIAOZHI_WEBSOCKET_TOKEN` 提供全局 token。
   - 涉及文件：
     - `chatbot-voice-gateway/src/main/java/com/jzb/chatbot/voice/XiaozhiWebSocketConfig.java`
     - `chatbot-voice-gateway/src/main/java/com/jzb/chatbot/voice/XiaozhiWebSocketHandler.java`
@@ -303,11 +307,11 @@ mvn -pl chatbot-voice-gateway -am test
 
 ### 阶段 3：固件配置与运维支撑
 
-- [ ] **任务 3.1：确定固件配置方式**
+- [x] **任务 3.1：确定固件配置方式**
   - 目标：决定首版使用手工配置 WebSocket，还是实现 OTA/激活接口下发配置。
   - 输入：硬件刷机方式、是否需要多设备批量配置、是否需要远程更新。
   - 输出：配置方案决策。
-  - 当前状态：可先按手工配置执行；OTA 不是第一轮阻塞项。
+  - 当前状态：已决策；首版使用手工配置 `websocket.url/token/version`，OTA 不进入第一轮 Sprint。
   - 推荐结论：首版使用手工配置 `websocket.url/token/version`，硬件联调稳定后再决定是否做 OTA。
   - 涉及文件：
     - `README.md`
@@ -317,11 +321,11 @@ mvn -pl chatbot-voice-gateway -am test
     - 明确 OTA 是否进入当前迭代。
   - 预估工作量：0.5 天。
 
-- [ ] **任务 3.2：补齐运行观测日志**
+- [x] **任务 3.2：补齐运行观测日志**
   - 目标：让真机联调失败时可以快速定位是连接、ASR、Hermes、TTS 还是音频格式问题。
   - 输入：当前 WebSocket 会话日志。
   - 输出：结构化关键日志。
-  - 当前状态：可执行，优先进入第一轮 Sprint。
+  - 当前状态：已完成本地实现；日志覆盖连接、hello、listen、回合耗时、空 ASR、Hermes/TTS 异常和非法 binary frame。
   - 依赖条件：无外部依赖。
   - 涉及文件：
     - `chatbot-voice-gateway/src/main/java/com/jzb/chatbot/voice/XiaozhiWebSocketHandler.java`
@@ -407,11 +411,11 @@ mvn -pl chatbot-voice-gateway -am test
 ## 推荐执行顺序
 
 1. 已完成：WebSocket 兼容路径、固件握手头读取、`Device-Id` 会话映射。
-2. 立即执行：WebSocket token 鉴权。
-3. 立即执行：运行观测日志。
-4. 立即执行：真实闭环失败路径测试。
-5. 立即执行：本地 WebSocket smoke 脚本，覆盖三个连接路径和握手头。
-6. 立即执行或接续执行：按 TTS 模式接入腾讯云 ASR。
+2. 已完成：WebSocket token 鉴权。
+3. 已完成：运行观测日志。
+4. 已完成：真实闭环失败路径测试。
+5. 已完成：本地 WebSocket smoke 脚本，覆盖三个连接路径和握手头。
+6. 已完成：按 TTS 模式接入腾讯云 ASR。
 7. 任务实现完成后：构建并部署到服务器 `203.195.202.54:8766`。
 8. 部署后：用公网 WebSocket smoke 验证服务端链路。
 9. 硬件到位后：执行小智真机端到端语音测试，并记录测试结果。
@@ -430,75 +434,40 @@ mvn -pl chatbot-voice-gateway -am test
 
 ### 问题 1：WebSocket token 配置来源
 
-**推荐方案**：
+**已决策**：
 
-- 方案 A：使用环境变量配置单个全局 token。优点是最快可用；缺点是多设备隔离弱。
-- 方案 B：复用或扩展现有设备配置文件，按设备配置 token。优点是更贴近后续多设备；缺点是实现稍复杂。
+- 首版使用环境变量配置单个全局 token：`XIAOZHI_WEBSOCKET_TOKEN`。
+- 服务端配置项：`chatbot.voice.websocket.token`。
+- 多设备 token 隔离待真机联调稳定后再升级。
 
-**推荐选择**：首版选择方案 A，真机联调稳定后再升级到方案 B。
-
-**等待用户选择**：
-
-```text
-请选择您偏好的方案，或提供其他建议：
-[ ] 方案 A
-[ ] 方案 B
-[ ] 其他方案：________
-```
+**状态**：已实现，兼容 `Bearer <token>` 和纯 token。
 
 ### 问题 2：腾讯云 ASR 接口形态
 
-**推荐方案**：
+**已决策**：
 
-- 方案 A：使用腾讯云一句话识别或录音文件识别，将本轮 Opus 音频聚合后转成可提交格式。优点是实现简单；缺点是实时性较弱。
-- 方案 B：使用腾讯云实时语音识别流式接口。优点是更贴近语音对话体验；缺点是实现复杂度更高。
+- 首版使用腾讯云一句话识别，将本轮 Opus 音频聚合后提交。
+- 后续需要边说边识别时再升级为实时语音识别流式接口。
 
-**推荐选择**：首版优先方案 A，先跑通 `listen.stop -> ASR -> Hermes -> TTS`；后续需要边说边识别时再升级方案 B。
-
-**等待用户选择**：
-
-```text
-请选择您偏好的方案，或提供其他建议：
-[ ] 方案 A
-[ ] 方案 B
-[ ] 其他方案：________
-```
+**状态**：已实现腾讯云一句话识别 Provider，真实云识别待部署配置和真实音频验证。
 
 ### 问题 3：固件配置方式
 
-**推荐方案**：
+**已决策**：
 
-- 方案 A：首版手工配置 `websocket.url/token/version`。优点是最快完成真机联调；缺点是批量设备不方便。
-- 方案 B：实现最小 OTA/激活配置接口。优点是体验接近官方；缺点是会增加服务端范围。
+- 首版手工配置 `websocket.url/token/version`。
+- OTA/激活配置接口不进入第一轮 Sprint。
 
-**推荐选择**：首版选择方案 A，OTA 不进入第一轮 Sprint。
-
-**等待用户选择**：
-
-```text
-请选择您偏好的方案，或提供其他建议：
-[ ] 方案 A
-[ ] 方案 B
-[ ] 其他方案：________
-```
+**状态**：已在 README 和当前清单记录配置方式；真机联调稳定后再决定是否做 OTA。
 
 ### 问题 4：MCP 是否进入本轮迭代
 
-**推荐方案**：
+**已决策**：
 
-- 方案 A：本轮不做 MCP，只保证真实语音聊天闭环。优点是范围清晰；缺点是暂不支持设备控制。
-- 方案 B：在语音闭环完成后追加 MCP 薄透传。优点是可支持设备控制；缺点是需要 Hermes 和固件双方联调。
+- 本轮不做 MCP，只保证真实语音聊天闭环。
+- 需要设备控制时，再追加 Hermes 到小智设备的 MCP 薄透传桥。
 
-**推荐选择**：选择方案 A。
-
-**等待用户选择**：
-
-```text
-请选择您偏好的方案，或提供其他建议：
-[ ] 方案 A
-[ ] 方案 B
-[ ] 其他方案：________
-```
+**状态**：暂缓，不进入基础闭环。
 
 ## 用户反馈区域
 

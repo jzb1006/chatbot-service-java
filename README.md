@@ -60,9 +60,10 @@ ws://<server-host>:8766/ws/xiaozhi/v1/
 - 设备发送 `hello` 后，服务端返回 `hello`，字段包含 `transport=websocket`、`session_id` 和 `audio_params`。
 - 支持 `listen.start`、`listen.stop`、`listen.detect`、`abort` 控制帧。
 - 支持 WebSocket binary v1/v2/v3 Opus 帧解包。
-- `listen.stop` 后使用 Fake ASR -> Hermes -> Fake TTS 完成最小闭环。
+- `listen.stop` 后使用 ASR -> Hermes -> TTS 完成最小闭环，ASR 默认 fake，可配置腾讯云一句话识别。
 - 下发 `stt`、`llm`、`tts.start`、`tts.sentence_start`、二进制音频帧、`tts.stop`。
 - 握手时读取小智固件请求头：`Authorization`、`Protocol-Version`、`Device-Id`、`Client-Id`。
+- 可通过 `chatbot.voice.websocket.token` / `XIAOZHI_WEBSOCKET_TOKEN` 强制校验 WebSocket token。
 - Hermes 请求优先使用 `Device-Id` 作为设备标识，缺失时回退到 WebSocket session id。
 
 固件侧需要配置：
@@ -74,7 +75,18 @@ websocket.version=1
 ```
 
 `websocket.token` 会由固件转换为 `Authorization: Bearer <token>`；当前版本已保存该头部，
-但还未执行强制鉴权，真实 token 校验仍属于后续任务。
+服务端配置 `XIAOZHI_WEBSOCKET_TOKEN` 后会强制鉴权。鉴权兼容 `Bearer <token>` 和纯 token；
+未配置 token 时保留本地调试兼容行为。
+
+本地 WebSocket smoke：
+
+```bash
+python3 scripts/xiaozhi_ws_smoke.py \
+  --base-url ws://127.0.0.1:8766 \
+  --token '<device-token>'
+```
+
+默认会覆盖 `/xiaozhi/v1`、`/ws/xiaozhi/v1` 和 `/ws/xiaozhi/v1/` 三个路径。
 
 MCP 边界：
 
@@ -85,7 +97,7 @@ MCP 边界：
 
 ## 暂不支持
 
-- 不接真实 ASR 厂商。
+- 不支持流式实时 ASR；当前真实 ASR 首版使用腾讯云一句话识别。
 - 不实现 Java 侧 MCP Server。
 - 不提供管理后台。
 - 不接 MySQL/Redis。
@@ -100,6 +112,8 @@ MCP 边界：
 ```yaml
 chatbot:
   voice:
+    websocket:
+      token: ${XIAOZHI_WEBSOCKET_TOKEN:}
     tts:
       provider: tencent
       tencent:
@@ -121,3 +135,22 @@ docker run --env-file /opt/chatbot-service-java-runtime/chatbot-service.env ...
 ```
 
 模板见 `deploy/chatbot-service.env.example`，真实 env 文件不要提交到 Git。
+
+## 腾讯云 ASR
+
+默认 ASR Provider 是 `fake`，用于本地协议 smoke。需要真实识别时配置腾讯云一句话识别：
+
+```yaml
+chatbot:
+  voice:
+    asr:
+      provider: tencent
+      tencent:
+        secret-id: ${TENCENT_CLOUD_SECRET_ID}
+        secret-key: ${TENCENT_CLOUD_SECRET_KEY}
+        region: ap-guangzhou
+        endpoint: asr.tencentcloudapi.com
+        engine-model-type: ${TENCENT_CLOUD_ASR_ENGINE_MODEL_TYPE:16k_zh}
+        voice-format: opus
+        sample-rate: 16000
+```
