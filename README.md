@@ -97,9 +97,17 @@ chatbot:
         secret-key: ${TENCENT_CLOUD_SECRET_KEY}
         region: ap-guangzhou
         endpoint: tts.tencentcloudapi.com
-        voice-type: "101001"
+        voice-type: ${TENCENT_CLOUD_TTS_VOICE_TYPE:101001}
         codec: pcm
         sample-rate: 16000
 ```
 
 腾讯云返回 PCM，服务端会编码成小智 WebSocket 使用的 Opus 帧后发送给设备。
+
+容器部署时使用 env-file 注入：
+
+```bash
+docker run --env-file /opt/chatbot-service-java-runtime/chatbot-service.env ...
+```
+
+模板见 `deploy/chatbot-service.env.example`，真实 env 文件不要提交到 Git。
