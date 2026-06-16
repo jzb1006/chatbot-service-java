@@ -28,6 +28,10 @@
 - [x] Hermes 请求已优先使用 `Device-Id` 作为设备标识。
 - [x] 设备先发 `hello`、服务端返回 `hello`，且使用 `audio_params` 字段。
 - [x] WebSocket binary v1/v2/v3 Opus 帧解包已有测试覆盖。
+- [x] 服务端下行 TTS binary v1/v2/v3 编码已与固件协议对齐。
+- [x] server hello 的 `audio_params` 已支持配置化，默认 `opus/16000/1/60`。
+- [x] WebSocket 会话已支持连续对话与 `session/new` 新会话控制。
+- [x] ASR 空结果、ASR 异常、Hermes 异常、TTS 异常已回传 `type=error` 事件。
 - [x] Fake ASR / Fake TTS 可支撑本地协议闭环测试。
 - [x] 腾讯云 TTS 已接入，服务器上已配置腾讯云参数。
 - [x] WebSocket token 已支持通过配置强制鉴权，兼容 `Bearer <token>` 和纯 token。
@@ -42,7 +46,8 @@
 |------|----------|--------------|----------|
 | 硬件真机 | 未在本文档中确认可用 | 阻塞真机播放、唤醒、麦克风、扬声器验收 | 第一轮先做本地和公网 WebSocket smoke |
 | ASR Provider | 已实现腾讯云一句话识别 Provider | 不再阻塞服务端代码；阻塞点转为云参数和真实音频识别验证 | 配置 `chatbot.voice.asr.provider=tencent` 后使用腾讯云 |
-| TTS 配置 | 腾讯云 TTS 已接入且服务器已配置 | 不再阻塞服务端实现；仍需验证真机播放 | 保留 Fake 回退，硬件到位后做播放验收 |
+| TTS 配置 | 腾讯云 TTS 已接入且服务器已配置；下行 binary 已按 `Protocol-Version` 编码 | 不再阻塞服务端实现；仍需验证真机播放 | 保留 Fake 回退，硬件到位后做播放验收 |
+| 音频参数 | server hello 已支持配置化 `audio_params` | 不阻塞服务端代码；上线时需确认与真实 TTS 输出一致 | 默认 `opus/16000/1/60`，可用环境变量覆盖 |
 | WebSocket token 来源 | 需要服务端配置来源 | 阻塞强制鉴权 | 第一轮用环境变量或现有设备配置做最小实现 |
 | OTA 是否需要 | 未决定 | 不阻塞手工配置固件联调 | 首版默认手工配置，OTA 作为可选任务 |
 | MCP 是否需要 | 不进入基础闭环 | 不阻塞语音对话 | 语音闭环稳定后再追加 |
@@ -110,12 +115,16 @@
 ### Sprint 1.3：真实闭环失败路径测试
 
 - 对应任务：任务 1.3。
-- 当前状态：已完成自动化测试；真实 ASR 和真机播放仍依赖后续条件。
+- 当前状态：已完成自动化测试；新增覆盖下行 binary 编码、会话控制和失败事件回传；真实 ASR 和真机播放仍依赖后续条件。
 - 推荐实现：继续保留 Fake ASR/TTS，补异常分支测试，不引入真实厂商依赖。
 - 最小范围：
   - ASR 返回空文本时不调用 Hermes，并给出可定位日志。
   - Hermes 异常时会话能回到可恢复状态。
   - TTS 返回空音频时仍发送明确的结束状态。
+  - ASR 空结果、ASR 异常、Hermes 异常、TTS 异常向固件回传 `type=error`。
+  - TTS 下行 binary 按当前 `Protocol-Version` 编码。
+  - `audio_params` 可通过配置覆盖，server hello 与配置一致。
+  - `session/new` 可切换 Hermes conversation，普通连续语音保持同一 conversation。
   - 非 listening 状态收到 binary frame 不污染下一轮音频缓存。
 - 验收证据：
   - `XiaozhiVoiceSessionServiceTest` 覆盖上述分支。
@@ -169,11 +178,15 @@ mvn -pl chatbot-voice-gateway -am test
 - 部署版本或 Git commit。
 - 服务器地址与 WebSocket 路径。
 - 固件设备 ID / Client ID。
+- Protocol-Version。
+- server hello audio_params。
+- Hermes conversation_id。
 - token 鉴权结果。
 - 设备 hello / server hello 是否成功。
 - ASR 识别文本。
 - Hermes 回复摘要。
 - TTS 是否正常播放。
+- 错误事件验证结果。
 - 失败现象、日志位置和下一步处理。
 
 ## 详细任务分解
@@ -239,7 +252,7 @@ mvn -pl chatbot-voice-gateway -am test
   - 目标：覆盖 `listen.start -> binary audio -> listen.stop -> ASR -> Hermes -> TTS` 主流程。
   - 输入：测试音频帧、Fake Hermes、Fake/真实 Speech Provider。
   - 输出：自动化测试和联调脚本。
-  - 当前状态：已完成自动化测试和联调脚本。
+  - 当前状态：已完成自动化测试和联调脚本；本轮已补齐下行 binary 编码、`audio_params` 配置化、`session/new` 和失败事件回传。
   - 依赖条件：无外部依赖。
   - 涉及文件：
     - `chatbot-voice-gateway/src/test/java/com/jzb/chatbot/voice/XiaozhiVoiceSessionServiceTest.java`
@@ -247,6 +260,10 @@ mvn -pl chatbot-voice-gateway -am test
   - 验收标准：
     - Maven 测试通过。
     - 失败路径覆盖 ASR 空结果、TTS 空结果、Hermes 异常。
+    - 失败路径回传 `type=error`，包含明确 `code`。
+    - TTS 下行 binary 按固件 `Protocol-Version` 编码。
+    - server hello 的 `audio_params` 可配置。
+    - `session/new` 后 Hermes conversation 会切换。
     - 保留 Fake ASR/TTS 作为默认测试通道。
   - 预估工作量：0.5-1 天。
 
@@ -278,7 +295,7 @@ mvn -pl chatbot-voice-gateway -am test
   - 目标：使用 `Device-Id` / `Client-Id` 作为稳定设备标识，而不是只依赖 WebSocket session id。
   - 输入：WebSocket 握手请求头。
   - 输出：语音会话中的设备上下文。
-  - 当前状态：已完成；已读取 `Protocol-Version`、`Device-Id`、`Client-Id`，Hermes 请求优先使用 `Device-Id`，后续只需在真机联调时验证真实设备头。
+  - 当前状态：已完成；已读取 `Protocol-Version`、`Device-Id`、`Client-Id`，Hermes 请求优先使用 `Device-Id`，普通连续语音保持同一 conversation，`session/new` 后切换 conversation；后续只需在真机联调时验证真实设备头。
   - 涉及文件：
     - `chatbot-voice-gateway/src/main/java/com/jzb/chatbot/voice/XiaozhiVoiceSession.java`
     - `chatbot-voice-gateway/src/main/java/com/jzb/chatbot/voice/XiaozhiVoiceSessionService.java`
@@ -287,6 +304,8 @@ mvn -pl chatbot-voice-gateway -am test
     - `xiaozhi-dialogue/src/main/java/com/xiaozhi/communication/common/MessageHandler.java`
   - 验收标准：
     - Hermes 请求中的 device id 使用真实设备标识。
+    - 普通连续语音保持同一 Hermes conversation。
+    - `session/new` 后切换新的 Hermes conversation。
     - 多设备同时连接时上下文互不污染。
   - 预估工作量：0.5 天。
 
@@ -301,6 +320,8 @@ mvn -pl chatbot-voice-gateway -am test
     - 服务端收到设备 hello 并返回 server hello。
     - 设备说话后，服务端日志能看到 ASR 文本和 Hermes 回复。
     - 设备能播放 TTS 回复。
+    - 记录当前 `Protocol-Version`、server hello `audio_params` 和 Hermes `conversation_id`。
+    - 验证至少一个失败场景能收到 `type=error` 事件。
     - 公网服务日志和 smoke 输出一并归档到联调记录。
     - 测试结果必须包含通过/失败结论；失败时必须记录下一步处理项。
   - 预估工作量：0.5-1 天，依赖硬件到位。
