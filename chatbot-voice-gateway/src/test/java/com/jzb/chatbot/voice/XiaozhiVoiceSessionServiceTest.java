@@ -14,6 +14,7 @@ import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
 import com.jzb.chatbot.speech.SpeechToTextClient;
 import com.jzb.chatbot.speech.TextToSpeechClient;
+import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientHello;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
@@ -42,7 +43,8 @@ class XiaozhiVoiceSessionServiceTest {
             new FakeTextToSpeechClient(),
             new XiaozhiServerEventFactory(new ObjectMapper()),
             new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-            new XiaozhiVoiceTokenAuth("")
+            new XiaozhiVoiceTokenAuth(""),
+            newMcpBridge()
     );
 
     @Test
@@ -178,7 +180,8 @@ class XiaozhiVoiceSessionServiceTest {
                 new FakeTextToSpeechClient(),
                 new XiaozhiServerEventFactory(new ObjectMapper()),
                 new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth("")
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge()
         );
         var headers = new HttpHeaders();
         headers.set("Device-Id", "aa:bb:cc:dd:ee:ff");
@@ -218,7 +221,8 @@ class XiaozhiVoiceSessionServiceTest {
                 new FakeTextToSpeechClient(),
                 new XiaozhiServerEventFactory(new ObjectMapper()),
                 new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth("")
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge()
         );
         var session = openSession(serviceWithRecordingHermes);
 
@@ -250,7 +254,8 @@ class XiaozhiVoiceSessionServiceTest {
                 new FakeTextToSpeechClient(),
                 new XiaozhiServerEventFactory(new ObjectMapper()),
                 new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth("")
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge()
         );
         var session = openSession(serviceWithBlankAsr);
 
@@ -279,7 +284,8 @@ class XiaozhiVoiceSessionServiceTest {
                 new FakeTextToSpeechClient(),
                 new XiaozhiServerEventFactory(new ObjectMapper()),
                 new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth("")
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge()
         );
         var session = openSession(serviceWithFailingHermes);
         serviceWithFailingHermes.handleText(session, new XiaozhiClientMessage(
@@ -308,7 +314,8 @@ class XiaozhiVoiceSessionServiceTest {
                 new EmptyTextToSpeechClient(),
                 new XiaozhiServerEventFactory(new ObjectMapper()),
                 new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth("")
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge()
         );
         var session = openSession(serviceWithEmptyTts);
         serviceWithEmptyTts.handleText(session, new XiaozhiClientMessage(
@@ -337,7 +344,8 @@ class XiaozhiVoiceSessionServiceTest {
                 new FailingTextToSpeechClient(),
                 new XiaozhiServerEventFactory(new ObjectMapper()),
                 new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth("")
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge()
         );
         var session = openSession(serviceWithFailingTts);
         serviceWithFailingTts.handleText(session, new XiaozhiClientMessage(
@@ -396,7 +404,8 @@ class XiaozhiVoiceSessionServiceTest {
                 new FakeTextToSpeechClient(),
                 new XiaozhiServerEventFactory(new ObjectMapper()),
                 new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth("")
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge()
         );
         var session = openSession(serviceWithRecordingSpeech);
 
@@ -412,6 +421,37 @@ class XiaozhiVoiceSessionServiceTest {
         assertThat(recordingSpeech.audioFramePayloads())
                 .singleElement()
                 .isEqualTo(List.of(1, 2, 3));
+    }
+
+    @Test
+    void shouldBridgeMcpInboundResponse() throws Exception {
+        var mcpBridge = newMcpBridge();
+        var serviceWithBridge = new XiaozhiVoiceSessionService(
+                codec,
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiServerEventFactory(new ObjectMapper()),
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth(""),
+                mcpBridge
+        );
+        var headers = new HttpHeaders();
+        headers.set("Device-Id", "device-1");
+        var session = new TestWebSocketSession("ws-session-1", URI.create("ws://127.0.0.1/xiaozhi/v1"), headers);
+        serviceWithBridge.open(session);
+        var future = mcpBridge.call("device-1", new ObjectMapper().readTree("""
+                {"jsonrpc":"2.0","id":9,"method":"tools/list"}
+                """), Duration.ofSeconds(1));
+
+        serviceWithBridge.handleText(session, new XiaozhiClientMessage(
+                "mcp", null, null, null, null, "ws-session-1", new ObjectMapper().readTree("""
+                        {"jsonrpc":"2.0","id":9,"result":{"tools":[]}}
+                        """)
+        ));
+
+        assertThat(future).succeedsWithin(Duration.ofMillis(100))
+                .satisfies(json -> assertThat(json.path("result").path("tools").isArray()).isTrue());
     }
 
     private TestWebSocketSession openSession() {
@@ -452,6 +492,10 @@ class XiaozhiVoiceSessionServiceTest {
         service.handleText(session, new XiaozhiClientMessage(
                 "listen", "stop", null, null, null, "ws-session-1", null
         ));
+    }
+
+    private XiaozhiMcpBridge newMcpBridge() {
+        return new XiaozhiMcpBridge(new XiaozhiServerEventFactory(new ObjectMapper()));
     }
 
     private static class CapturingHermesClient implements HermesClient {

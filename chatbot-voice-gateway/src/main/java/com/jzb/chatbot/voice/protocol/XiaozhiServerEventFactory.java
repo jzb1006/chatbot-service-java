@@ -1,5 +1,6 @@
 package com.jzb.chatbot.voice.protocol;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -67,6 +68,14 @@ public class XiaozhiServerEventFactory {
                 .put("code", code)
                 .put("message", message)
                 .toString();
+    }
+
+    public String mcp(String sessionId, JsonNode payload) {
+        var root = objectMapper.createObjectNode()
+                .put("session_id", sessionId)
+                .put("type", "mcp");
+        root.set("payload", payload == null ? objectMapper.createObjectNode() : payload);
+        return root.toString();
     }
 
     private String ttsState(String sessionId, String state) {

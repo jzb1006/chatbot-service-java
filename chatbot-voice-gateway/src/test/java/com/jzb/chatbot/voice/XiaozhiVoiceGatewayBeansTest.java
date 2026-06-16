@@ -10,6 +10,7 @@ import com.jzb.chatbot.speech.SpeechToTextClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextClient;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
 import com.jzb.chatbot.speech.TextToSpeechClient;
+import com.jzb.chatbot.voice.mcp.XiaozhiMcpAdminAuth;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -129,5 +130,21 @@ class XiaozhiVoiceGatewayBeansTest {
                 .withPropertyValues("chatbot.voice.asr.provider=tencent")
                 .run(context -> assertThat(context.getStartupFailure())
                         .hasRootCauseMessage("Tencent Cloud ASR requires secret-id and secret-key"));
+    }
+
+    @Test
+    void shouldRequireMcpAdminTokenWhenAuthRequiredIsTrue() {
+        var auth = new XiaozhiMcpAdminAuth("", "", true);
+
+        assertThat(auth.required()).isTrue();
+        assertThat(auth.matches("")).isFalse();
+    }
+
+    @Test
+    void shouldMatchHermesBearerToken() {
+        var auth = new XiaozhiMcpAdminAuth("admin-token", "hermes-token", true);
+
+        assertThat(auth.matchesHermes("Bearer hermes-token")).isTrue();
+        assertThat(auth.matchesHermes("Bearer bad")).isFalse();
     }
 }

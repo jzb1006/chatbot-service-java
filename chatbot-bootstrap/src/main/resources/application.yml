@@ -31,6 +31,10 @@ chatbot:
     default-voice-id: default
     websocket:
       token: ${XIAOZHI_WEBSOCKET_TOKEN:}
+    mcp:
+      auth-required: ${XIAOZHI_MCP_AUTH_REQUIRED:false}
+      admin-token: ${XIAOZHI_MCP_ADMIN_TOKEN:}
+      hermes-token: ${XIAOZHI_MCP_HERMES_TOKEN:${XIAOZHI_MCP_ADMIN_TOKEN:}}
     audio:
       format: ${CHATBOT_VOICE_AUDIO_FORMAT:opus}
       sample-rate: ${CHATBOT_VOICE_AUDIO_SAMPLE_RATE:16000}

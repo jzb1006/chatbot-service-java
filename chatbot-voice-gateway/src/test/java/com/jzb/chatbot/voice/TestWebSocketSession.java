@@ -14,7 +14,7 @@ import org.springframework.web.socket.WebSocketExtension;
 import org.springframework.web.socket.WebSocketMessage;
 import org.springframework.web.socket.WebSocketSession;
 
-class TestWebSocketSession implements WebSocketSession {
+public class TestWebSocketSession implements WebSocketSession {
 
     private final String id;
     private final URI uri;
@@ -24,23 +24,23 @@ class TestWebSocketSession implements WebSocketSession {
     private CloseStatus closeStatus;
     private boolean open = true;
 
-    TestWebSocketSession(String id) {
+    public TestWebSocketSession(String id) {
         this.id = id;
         this.uri = URI.create("ws://127.0.0.1/xiaozhi/v1");
         this.handshakeHeaders = HttpHeaders.EMPTY;
     }
 
-    TestWebSocketSession(String id, URI uri, HttpHeaders handshakeHeaders) {
+    public TestWebSocketSession(String id, URI uri, HttpHeaders handshakeHeaders) {
         this.id = id;
         this.uri = uri;
         this.handshakeHeaders = HttpHeaders.readOnlyHttpHeaders(handshakeHeaders);
     }
 
-    List<WebSocketMessage<?>> getSentMessages() {
+    public List<WebSocketMessage<?>> getSentMessages() {
         return sentMessages;
     }
 
-    CloseStatus getCloseStatus() {
+    public CloseStatus getCloseStatus() {
         return closeStatus;
     }
 

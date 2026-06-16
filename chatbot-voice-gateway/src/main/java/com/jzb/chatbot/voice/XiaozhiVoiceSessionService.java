@@ -8,6 +8,7 @@ import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.hermes.HermesRequest;
 import com.jzb.chatbot.speech.SpeechToTextClient;
 import com.jzb.chatbot.speech.TextToSpeechClient;
+import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientHello;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
@@ -49,6 +50,7 @@ public class XiaozhiVoiceSessionService {
     private final XiaozhiServerEventFactory eventFactory;
     private final HermesClientConfig hermesClientConfig;
     private final XiaozhiVoiceTokenAuth tokenAuth;
+    private final XiaozhiMcpBridge mcpBridge;
     private final Map<String, XiaozhiVoiceSession> sessions = new ConcurrentHashMap<>();
 
     /**
@@ -72,6 +74,7 @@ public class XiaozhiVoiceSessionService {
             return false;
         }
         sessions.put(session.getId(), voiceSession);
+        mcpBridge.register(voiceSession.deviceId(), session.getId(), session);
         log.info("xiaozhi websocket connected, sessionId={}, deviceId={}, clientId={}, protocolVersion={}, authRequired={}, authResult=success",
                 session.getId(),
                 voiceSession.deviceId(),
@@ -97,7 +100,10 @@ public class XiaozhiVoiceSessionService {
      * @param session WebSocket 会话
      */
     public void close(WebSocketSession session) {
-        sessions.remove(session.getId());
+        var voiceSession = sessions.remove(session.getId());
+        if (voiceSession != null) {
+            mcpBridge.unregister(voiceSession.deviceId(), session.getId());
+        }
         log.info("xiaozhi websocket closed, sessionId={}", session.getId());
     }
 
@@ -163,7 +169,9 @@ public class XiaozhiVoiceSessionService {
             return;
         }
         if ("mcp".equals(message.type())) {
-            log.debug("ignore xiaozhi mcp message in java gateway, sessionId={}", webSocketSession.getId());
+            mcpBridge.handleInbound(voiceSession.deviceId(), message.payload());
+            log.debug("xiaozhi mcp message bridged, sessionId={}, deviceId={}",
+                    webSocketSession.getId(), voiceSession.deviceId());
         }
     }
 

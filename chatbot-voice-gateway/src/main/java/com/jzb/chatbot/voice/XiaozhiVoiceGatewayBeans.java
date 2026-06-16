@@ -11,6 +11,7 @@ import com.jzb.chatbot.speech.TencentCloudSpeechToTextConfig;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechConfig;
 import com.jzb.chatbot.speech.TextToSpeechClient;
+import com.jzb.chatbot.voice.mcp.XiaozhiMcpAdminAuth;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -36,6 +37,15 @@ public class XiaozhiVoiceGatewayBeans {
             @Value("${chatbot.voice.websocket.token:}") String expectedToken
     ) {
         return new XiaozhiVoiceTokenAuth(expectedToken);
+    }
+
+    @Bean
+    XiaozhiMcpAdminAuth xiaozhiMcpAdminAuth(
+            @Value("${chatbot.voice.mcp.admin-token:}") String adminToken,
+            @Value("${chatbot.voice.mcp.hermes-token:}") String hermesToken,
+            @Value("${chatbot.voice.mcp.auth-required:false}") boolean authRequired
+    ) {
+        return new XiaozhiMcpAdminAuth(adminToken, hermesToken, authRequired);
     }
 
     @Bean
