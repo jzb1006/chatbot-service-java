@@ -37,8 +37,8 @@
 - [x] WebSocket token 已支持通过配置强制鉴权，兼容 `Bearer <token>` 和纯 token。
 - [x] ASR 首版已接入腾讯云一句话识别 Provider，默认仍保留 Fake 回退；真实云识别待部署配置后验证。
 - [ ] 腾讯云 TTS 尚未完成小智真机播放验收。
-- [ ] OTA / 激活配置接口尚未实现。
-- [ ] MCP 目前只记录并忽略，尚未做 Hermes 到设备的薄透传。
+- [x] OTA / 激活配置接口已实现服务端薄能力；真机 OTA 验证待完成。
+- [x] MCP 已实现 Hermes 到在线小智设备的薄透传桥；真机设备工具调用验证待完成。
 
 ## 执行条件与阻塞项
 
@@ -49,8 +49,8 @@
 | TTS 配置 | 腾讯云 TTS 已接入且服务器已配置；下行 binary 已按 `Protocol-Version` 编码 | 不再阻塞服务端实现；仍需验证真机播放 | 保留 Fake 回退，硬件到位后做播放验收 |
 | 音频参数 | server hello 已支持配置化 `audio_params` | 不阻塞服务端代码；上线时需确认与真实 TTS 输出一致 | 默认 `opus/16000/1/60`，可用环境变量覆盖 |
 | WebSocket token 来源 | 需要服务端配置来源 | 阻塞强制鉴权 | 第一轮用环境变量或现有设备配置做最小实现 |
-| OTA 是否需要 | 未决定 | 不阻塞手工配置固件联调 | 首版默认手工配置，OTA 作为可选任务 |
-| MCP 是否需要 | 不进入基础闭环 | 不阻塞语音对话 | 语音闭环稳定后再追加 |
+| OTA 是否需要 | 已实现服务端薄能力 | 不阻塞手工配置固件联调；可用于固件获取 WebSocket 配置 | 实现计划见 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md`，真机 OTA 验证待完成 |
+| MCP 是否需要 | 已实现薄透传桥 | 不阻塞语音对话；可供 Hermes 通过 HTTP JSON-RPC 调在线设备工具 | 实现计划见 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md`，真机设备工具验证待完成 |
 
 ## 整体规划概述
 
@@ -357,11 +357,11 @@ mvn -pl chatbot-voice-gateway -am test
     - 自动化测试覆盖 token 脱敏或至少确认日志实现不直接输出 `Authorization` 原文。
   - 预估工作量：0.5 天。
 
-- [ ] **任务 3.3：可选实现 OTA/激活配置接口**
+- [x] **任务 3.3：可选实现 OTA/激活配置接口**
   - 目标：如果需要贴近小智官方体验，由服务端向固件下发 websocket 配置和版本信息。
   - 输入：小智固件 OTA 协议、设备激活策略、固件版本信息。
   - 输出：最小 OTA/激活配置 API。
-  - 当前状态：暂缓；不进入第一轮 Sprint。
+  - 当前状态：已按 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md` 实现服务端薄能力；真机 OTA 验证待完成。
   - 依赖条件：确认是否需要批量设备配置或远程配置下发。
   - 涉及文件：
     - 新模块或现有 `chatbot-device-gateway`
@@ -380,11 +380,11 @@ mvn -pl chatbot-voice-gateway -am test
 
 ### 阶段 4：增强能力
 
-- [ ] **任务 4.1：MCP 薄透传桥**
+- [x] **任务 4.1：MCP 薄透传桥**
   - 目标：在需要设备控制时，让 Hermes 与小智设备之间可以交换 `type=mcp` 消息。
   - 输入：Hermes 工具调用能力、小智固件 MCP 消息格式。
   - 输出：MCP 消息转发逻辑。
-  - 当前状态：暂缓；不进入基础语音闭环。
+  - 当前状态：已按 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md` 实现 WebSocket 会话注册、MCP JSON-RPC 转发、运维 REST 和 Hermes HTTP JSON-RPC 适配入口；真机设备工具调用验证待完成。
   - 依赖条件：Hermes 侧明确需要调用设备能力。
   - 涉及文件：
     - `chatbot-voice-gateway/src/main/java/com/jzb/chatbot/voice/XiaozhiVoiceSessionService.java`
@@ -477,18 +477,18 @@ mvn -pl chatbot-voice-gateway -am test
 **已决策**：
 
 - 首版手工配置 `websocket.url/token/version`。
-- OTA/激活配置接口不进入第一轮 Sprint。
+- OTA/激活配置接口已拆出计划 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md` 并实现服务端薄能力。
 
-**状态**：已在 README 和当前清单记录配置方式；真机联调稳定后再决定是否做 OTA。
+**状态**：已在 README 和当前清单记录 OTA 配置方式；真机 OTA 验证待完成。
 
 ### 问题 4：MCP 是否进入本轮迭代
 
 **已决策**：
 
-- 本轮不做 MCP，只保证真实语音聊天闭环。
-- 需要设备控制时，再追加 Hermes 到小智设备的 MCP 薄透传桥。
+- MCP 薄透传桥已拆出计划 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md` 并实现服务端薄能力。
+- Java 不重复实现设备业务工具，也不实现完整 MCP stdio/SSE transport。
 
-**状态**：暂缓，不进入基础闭环。
+**状态**：已实现 Hermes HTTP JSON-RPC 适配入口和设备 MCP 转发；真机设备工具调用验证待完成。
 
 ## 用户反馈区域
 

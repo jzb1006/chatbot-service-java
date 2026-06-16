@@ -88,20 +88,84 @@ python3 scripts/xiaozhi_ws_smoke.py \
 
 默认会覆盖 `/xiaozhi/v1`、`/ws/xiaozhi/v1` 和 `/ws/xiaozhi/v1/` 三个路径。
 
+## 小智 OTA / 激活配置
+
+固件侧 `ota_url` 指向：
+
+```text
+http://<server-host>:8766/api/ota/check
+```
+
+服务端返回 `websocket`、`server_time` 和 `firmware`。如果 `XIAOZHI_OTA_ACTIVATION_REQUIRED=true`，
+响应会包含 `activation.challenge`，固件随后调用：
+
+```text
+POST /api/ota/check/activate
+```
+
+生产环境返回 `websocket.token` 前应配置 `XIAOZHI_OTA_ALLOWED_DEVICE_IDS`
+或 `XIAOZHI_OTA_ALLOWED_SERIAL_NUMBERS`，避免向未知设备下发 token。
+`XIAOZHI_OTA_WEBSOCKET_TOKEN` 默认继承 `XIAOZHI_WEBSOCKET_TOKEN`；如果没有配置
+OTA 设备白名单，服务会拒绝启动，避免误把 WebSocket token 暴露给任意 OTA 请求。
+
+本地 OTA smoke：
+
+```bash
+python3 scripts/xiaozhi_ota_smoke.py \
+  --url http://127.0.0.1:8766/api/ota/check \
+  --device-id smoke-device-1 \
+  --client-id smoke-client-1
+```
+
+## 小智 MCP 薄桥
+
+Java 服务端不实现设备业务工具，只通过已连接的小智 WebSocket 设备转发 JSON-RPC payload。
+Hermes 接入时使用 Java 暴露的“小智设备 MCP 网关”HTTP JSON-RPC 入口。
+
+列出在线设备：
+
+```bash
+curl -H "X-MCP-Admin-Token: <admin-token>" \
+  http://203.195.202.54:8766/api/xiaozhi/devices
+```
+
+下发 `tools/list`：
+
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "X-MCP-Admin-Token: <admin-token>" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"withUserTools":true}}' \
+  http://203.195.202.54:8766/api/xiaozhi/devices/<device-id>/mcp
+```
+
+Hermes HTTP JSON-RPC 适配入口：
+
+```text
+POST http://203.195.202.54:8766/api/hermes/xiaozhi/mcp
+Authorization: Bearer <hermes-mcp-token>
+```
+
+Hermes 侧 `tools/list` 会看到三个稳定工具：
+
+- `xiaozhi_list_online_devices`
+- `xiaozhi_list_device_tools`
+- `xiaozhi_call_device_tool`
+
 MCP 边界：
 
 - Java 中间件不实现 MCP Server。
-- 收到 `type=mcp` 只记录并忽略。
+- Java 侧只做 Hermes 与在线小智设备之间的 JSON-RPC 薄透传桥。
 - Hermes 负责工具调用、编排和记忆。
-- 后续如需控制设备本身，只做 Hermes 与小智设备之间的薄透传桥。
+- 当前入口是 Spring MVC HTTP JSON-RPC endpoint，不是完整 MCP stdio/SSE transport。
 
 ## 暂不支持
 
 - 不支持流式实时 ASR；当前真实 ASR 首版使用腾讯云一句话识别。
-- 不实现 Java 侧 MCP Server。
+- 不实现完整 MCP stdio/SSE transport。
 - 不提供管理后台。
 - 不接 MySQL/Redis。
-- 不做 RAG、长期记忆存储和 OTA。
+- 不做 RAG、长期记忆存储和 OTA 包上传后台。
 - 不做声纹识别。
 - 不迁移固件代码。
 
