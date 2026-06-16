@@ -9,6 +9,24 @@ chatbot:
     config-path: /app/data/llm_config.json
   hermes:
     base-url: http://hermes:8642/v1
+  ota:
+    enabled: ${XIAOZHI_OTA_ENABLED:true}
+    websocket:
+      url: ${XIAOZHI_OTA_WEBSOCKET_URL:}
+      token: ${XIAOZHI_OTA_WEBSOCKET_TOKEN:${XIAOZHI_WEBSOCKET_TOKEN:}}
+      version: ${XIAOZHI_OTA_WEBSOCKET_VERSION:1}
+    firmware:
+      version: ${XIAOZHI_OTA_FIRMWARE_VERSION:}
+      url: ${XIAOZHI_OTA_FIRMWARE_URL:}
+      force: ${XIAOZHI_OTA_FIRMWARE_FORCE:false}
+      directory: ${XIAOZHI_OTA_FIRMWARE_DIR:/app/firmware}
+    activation:
+      required: ${XIAOZHI_OTA_ACTIVATION_REQUIRED:false}
+      message: ${XIAOZHI_OTA_ACTIVATION_MESSAGE:请在服务端完成设备激活}
+      ttl-seconds: ${XIAOZHI_OTA_ACTIVATION_TTL_SECONDS:30}
+    security:
+      allowed-device-ids: ${XIAOZHI_OTA_ALLOWED_DEVICE_IDS:}
+      allowed-serial-numbers: ${XIAOZHI_OTA_ALLOWED_SERIAL_NUMBERS:}
   voice:
     default-voice-id: default
     websocket:

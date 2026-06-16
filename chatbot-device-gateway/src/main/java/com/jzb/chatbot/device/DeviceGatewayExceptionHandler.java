@@ -15,7 +15,10 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
  * @author jiangzhibin
  * @since 2026-06-14 19:25:00
  */
-@RestControllerAdvice(assignableTypes = DeviceChatController.class)
+@RestControllerAdvice(assignableTypes = {
+        DeviceChatController.class,
+        com.jzb.chatbot.device.ota.XiaozhiOtaController.class
+})
 public class DeviceGatewayExceptionHandler {
 
     /**
