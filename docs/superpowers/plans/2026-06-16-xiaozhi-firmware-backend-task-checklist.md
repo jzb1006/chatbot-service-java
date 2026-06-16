@@ -37,8 +37,8 @@
 - [x] WebSocket token 已支持通过配置强制鉴权，兼容 `Bearer <token>` 和纯 token。
 - [x] ASR 首版已接入腾讯云一句话识别 Provider，默认仍保留 Fake 回退；真实云识别待部署配置后验证。
 - [ ] 腾讯云 TTS 尚未完成小智真机播放验收。
-- [x] OTA / 激活配置接口已实现服务端薄能力；真机 OTA 验证待完成。
-- [x] MCP 已实现 Hermes 到在线小智设备的薄透传桥；真机设备工具调用验证待完成。
+- [x] OTA / 激活配置接口已实现服务端薄能力并通过公网 smoke；真机 OTA token 下发待设备白名单后验证。
+- [x] MCP 已实现 Hermes 到在线小智设备的薄透传桥并通过公网模拟设备验证；真机设备工具调用验证待完成。
 
 ## 执行条件与阻塞项
 
@@ -49,8 +49,8 @@
 | TTS 配置 | 腾讯云 TTS 已接入且服务器已配置；下行 binary 已按 `Protocol-Version` 编码 | 不再阻塞服务端实现；仍需验证真机播放 | 保留 Fake 回退，硬件到位后做播放验收 |
 | 音频参数 | server hello 已支持配置化 `audio_params` | 不阻塞服务端代码；上线时需确认与真实 TTS 输出一致 | 默认 `opus/16000/1/60`，可用环境变量覆盖 |
 | WebSocket token 来源 | 需要服务端配置来源 | 阻塞强制鉴权 | 第一轮用环境变量或现有设备配置做最小实现 |
-| OTA 是否需要 | 已实现服务端薄能力 | 不阻塞手工配置固件联调；可用于固件获取 WebSocket 配置 | 实现计划见 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md`，真机 OTA 验证待完成 |
-| MCP 是否需要 | 已实现薄透传桥 | 不阻塞语音对话；可供 Hermes 通过 HTTP JSON-RPC 调在线设备工具 | 实现计划见 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md`，真机设备工具验证待完成 |
+| OTA 是否需要 | 已实现服务端薄能力并通过公网 smoke | 不阻塞手工配置固件联调；可用于固件获取 WebSocket 配置 | 实现计划见 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md`，真机 OTA token 下发待设备白名单后验证 |
+| MCP 是否需要 | 已实现薄透传桥并通过公网模拟设备验证 | 不阻塞语音对话；可供 Hermes 通过 HTTP JSON-RPC 调在线设备工具 | 实现计划见 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md`，真机设备工具验证待完成 |
 
 ## 整体规划概述
 
@@ -479,7 +479,7 @@ mvn -pl chatbot-voice-gateway -am test
 - 首版手工配置 `websocket.url/token/version`。
 - OTA/激活配置接口已拆出计划 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md` 并实现服务端薄能力。
 
-**状态**：已在 README 和当前清单记录 OTA 配置方式；真机 OTA 验证待完成。
+**状态**：已在 README 和当前清单记录 OTA 配置方式；公网 OTA smoke 已通过。生产安全配置为未配置 OTA 白名单时不下发 WebSocket token；真机 OTA token 下发待拿到设备 `Device-Id` 或序列号后补白名单验证。
 
 ### 问题 4：MCP 是否进入本轮迭代
 
@@ -488,7 +488,7 @@ mvn -pl chatbot-voice-gateway -am test
 - MCP 薄透传桥已拆出计划 `docs/superpowers/plans/2026-06-16-xiaozhi-ota-mcp-adaptation.md` 并实现服务端薄能力。
 - Java 不重复实现设备业务工具，也不实现完整 MCP stdio/SSE transport。
 
-**状态**：已实现 Hermes HTTP JSON-RPC 适配入口和设备 MCP 转发；真机设备工具调用验证待完成。
+**状态**：已实现 Hermes HTTP JSON-RPC 适配入口和设备 MCP 转发；公网模拟设备已验证 `tools/list` 和 `tools/call` 透传，真机设备工具调用验证待完成。
 
 ## 用户反馈区域
 
@@ -605,4 +605,30 @@ TTS 播放结果：收到 tts.start、tts.sentence_start、445 个二进制 TTS 
 最终结论：公网 WebSocket 软件链路通过；小智裸 Opus 上行已由服务端解码为 16k PCM 并成功调用腾讯云一句话识别，随后 Hermes 与腾讯云 TTS 全链路完成
 失败现象与日志位置：修复前曾出现 input sample rate not supported；修复后 device_gateway 日志显示 xiaozhi turn completed, audioFrames=65, ttsFrames=445, asrMillis=445, hermesMillis=3617, ttsMillis=8867
 下一步处理：硬件到位后用真实小智设备复测麦克风采集质量与扬声器播放效果；软件公网链路已通过
+```
+
+### 2026-06-16 OTA/MCP 公网部署与真实语音链路复测
+
+```text
+测试时间：2026-06-16 15:10:04 +08:00
+部署版本 / Git commit：9be0708；远程镜像 sha256:4b8a142eb82567921203130a83c91676a907b213775ef64442b29350e209fb2a；远程 jar sha256:f19695cd8d97293278f667fae2d9f2181b97a6b8c25f3163b9c4b8d9843b6f7a
+服务器地址：203.195.202.54:8766
+配置变更：/opt/chatbot-service-java-runtime/chatbot-service.env 增加 XIAOZHI_WEBSOCKET_TOKEN、XIAOZHI_OTA_*、XIAOZHI_MCP_*；MCP 强制鉴权启用；OTA websocket token 显式置空，避免无白名单时向未知设备下发 token
+配置备份：/opt/chatbot-service-java-runtime/backups/chatbot-service.env.20260616145713
+jar 备份：/opt/chatbot-service-java-runtime/backups/chatbot-service.jar.20260616145825
+OTA URL：http://203.195.202.54:8766/api/ota/check
+WebSocket 路径：/xiaozhi/v1
+固件设备 ID：remote-real-audio；MCP 模拟设备 ID：remote-mcp-sim
+Client ID：remote-real-audio-client；remote-mcp-sim-client
+token 鉴权结果：WebSocket authRequired=true，真实语音 smoke 使用远程 device_token 连接成功；MCP 错误 token 返回 401，正确 token 可访问
+OTA 验证结果：公网 OTA smoke 返回 websocket.url=ws://203.195.202.54:8766/xiaozhi/v1、websocket.version=1、websocket.token=""、firmware 为空版本和空 URL，符合无白名单安全配置
+设备 hello / server hello：通过；server hello 返回 audio_params(format=opus, sample_rate=16000, channels=1, frame_duration=60)
+ASR 识别文本：你好，小智回答一个字，行。
+Hermes 回复摘要：行
+TTS 播放结果：收到 tts.start、tts.sentence_start、16 个二进制 TTS 音频帧、tts.stop
+MCP 运维 REST 结果：/api/xiaozhi/devices 在模拟设备在线时返回 ["remote-mcp-sim"]；/api/xiaozhi/devices/remote-mcp-sim/mcp 返回 {"status":"sent"}
+Hermes HTTP JSON-RPC 结果：tools/list 返回 xiaozhi_list_online_devices、xiaozhi_list_device_tools、xiaozhi_call_device_tool；tools/call(xiaozhi_list_device_tools) 透传到模拟设备并返回 self.get_device_status；tools/call(xiaozhi_call_device_tool) 返回模拟设备工具结果
+最终结论：最新 OTA/MCP 版本已部署到公网，REST、OTA、WebSocket 真实语音、Hermes、TTS、MCP 鉴权和模拟设备透传软件链路均通过；物理真机 OTA token 下发、真机设备 MCP 工具和扬声器播放仍需真实设备验证
+失败现象与日志位置：第一次 WebSocket smoke 使用 3 字节假音频，真实 ASR 返回空文本并触发 asr_empty；改用 16k PCM 语音样本经项目 Opus 编码器生成 50 帧后通过。容器日志显示 xiaozhi turn completed, audioFrames=50, ttsFrames=16, asrMillis=198, hermesMillis=2751, ttsMillis=737
+下一步处理：提供真实小智设备的 Device-Id 或序列号后，补充 XIAOZHI_OTA_ALLOWED_DEVICE_IDS 或 XIAOZHI_OTA_ALLOWED_SERIAL_NUMBERS，并用真机验证 OTA token 下发、设备 MCP tools/list/tools/call 和扬声器播放
 ```

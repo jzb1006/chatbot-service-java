@@ -2179,19 +2179,19 @@ python3 scripts/hermes_xiaozhi_mcp_smoke.py \
 
 预期：返回 JSON-RPC `result.tools`，包含 `xiaozhi_list_online_devices`、`xiaozhi_list_device_tools`、`xiaozhi_call_device_tool`。
 
-- [ ] **步骤 8：公网发布门禁**
+- [x] **步骤 8：公网发布门禁**
 
 影响协议、OTA、MCP、鉴权或部署配置时，发布顺序固定为：
 
-1. 本地测试。
-2. 构建 `chatbot-bootstrap`。
-3. 部署到 `203.195.202.54:8766`。
-4. 公网 OTA smoke。
-5. 公网 WebSocket smoke。
-6. 运维 MCP smoke。
-7. Hermes HTTP JSON-RPC smoke。
-8. 小智真机验证 OTA 配置、设备 MCP `tools/list` 和 Hermes HTTP JSON-RPC `tools/list`。
-9. 将测试时间、Git commit、设备 ID、OTA URL、WebSocket URL、设备 MCP 调用结果、Hermes HTTP JSON-RPC 调用结果写入 `2026-06-16-xiaozhi-firmware-backend-task-checklist.md` 的真机测试记录。
+1. 本地测试。已完成。
+2. 构建 `chatbot-bootstrap`。已完成。
+3. 部署到 `203.195.202.54:8766`。已完成，远程镜像 `sha256:4b8a142eb82567921203130a83c91676a907b213775ef64442b29350e209fb2a`。
+4. 公网 OTA smoke。已完成，返回 WebSocket URL 和空 token，符合无白名单安全配置。
+5. 公网 WebSocket smoke。已完成，真实语音 Opus 上行触发 ASR、Hermes 和 TTS，下发 16 个二进制 TTS 帧。
+6. 运维 MCP smoke。已完成，管理 REST 鉴权和模拟设备下发通过。
+7. Hermes HTTP JSON-RPC smoke。已完成，`tools/list`、`xiaozhi_list_online_devices`、`xiaozhi_list_device_tools`、`xiaozhi_call_device_tool` 均通过。
+8. 小智真机验证 OTA 配置、设备 MCP `tools/list` 和 Hermes HTTP JSON-RPC `tools/list`。物理真机待执行，需要真实设备 `Device-Id` 或序列号后补 OTA 白名单。
+9. 将测试时间、Git commit、设备 ID、OTA URL、WebSocket URL、设备 MCP 调用结果、Hermes HTTP JSON-RPC 调用结果写入 `2026-06-16-xiaozhi-firmware-backend-task-checklist.md` 的真机测试记录。已追加 `2026-06-16 OTA/MCP 公网部署与真实语音链路复测`。
 
 ## 关键风险与处理
 
