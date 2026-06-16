@@ -25,12 +25,23 @@ public class XiaozhiMessageCodec {
      * 编码服务端 hello 消息。
      *
      * @param sessionId 会话标识
-     * @param conversationId 对话标识
      * @return JSON 文本
      * @throws JsonProcessingException JSON 序列化失败
      */
     public String encodeServerHello(String sessionId) throws JsonProcessingException {
-        return objectMapper.writeValueAsString(XiaozhiServerHello.websocket(sessionId));
+        return encodeServerHello(sessionId, XiaozhiAudioParams.defaults());
+    }
+
+    /**
+     * 编码服务端 hello 消息。
+     *
+     * @param sessionId 会话标识
+     * @param audioParams 音频参数
+     * @return JSON 文本
+     * @throws JsonProcessingException JSON 序列化失败
+     */
+    public String encodeServerHello(String sessionId, XiaozhiAudioParams audioParams) throws JsonProcessingException {
+        return objectMapper.writeValueAsString(XiaozhiServerHello.websocket(sessionId, audioParams));
     }
 
     /**
@@ -79,6 +90,39 @@ public class XiaozhiMessageCodec {
         }
     }
 
+    /**
+     * 编码服务端下行二进制音频帧。
+     *
+     * @param protocolVersion 二进制协议版本
+     * @param timestamp 时间戳
+     * @param payload Opus payload
+     * @return WebSocket 二进制 payload
+     */
+    public ByteBuffer encodeAudioFrame(int protocolVersion, long timestamp, ByteBuffer payload) {
+        var bytes = toBytes(payload);
+        if (protocolVersion == 2) {
+            var output = ByteBuffer.allocate(16 + bytes.length);
+            output.putShort((short) 2);
+            output.putShort((short) 0);
+            output.putInt(0);
+            output.putInt((int) timestamp);
+            output.putInt(bytes.length);
+            output.put(bytes);
+            output.flip();
+            return output;
+        }
+        if (protocolVersion == 3) {
+            var output = ByteBuffer.allocate(4 + bytes.length);
+            output.put((byte) 0);
+            output.put((byte) 0);
+            output.putShort((short) bytes.length);
+            output.put(bytes);
+            output.flip();
+            return output;
+        }
+        return ByteBuffer.wrap(bytes);
+    }
+
     private XiaozhiAudioFrame decodeBinaryV2(ByteBuffer input) {
         requireRemaining(input, 16);
         input.getShort();
@@ -113,5 +157,15 @@ public class XiaozhiMessageCodec {
         if (input.remaining() < size) {
             throw new XiaozhiProtocolException("invalid binary audio frame header");
         }
+    }
+
+    private byte[] toBytes(ByteBuffer payload) {
+        if (payload == null) {
+            return new byte[0];
+        }
+        var input = payload.slice();
+        var bytes = new byte[input.remaining()];
+        input.get(bytes);
+        return bytes;
     }
 }

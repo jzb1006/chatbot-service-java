@@ -11,6 +11,7 @@ import com.jzb.chatbot.speech.TencentCloudSpeechToTextConfig;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechConfig;
 import com.jzb.chatbot.speech.TextToSpeechClient;
+import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,6 +36,16 @@ public class XiaozhiVoiceGatewayBeans {
             @Value("${chatbot.voice.websocket.token:}") String expectedToken
     ) {
         return new XiaozhiVoiceTokenAuth(expectedToken);
+    }
+
+    @Bean
+    XiaozhiAudioParams xiaozhiAudioParams(
+            @Value("${chatbot.voice.audio.format:opus}") String format,
+            @Value("${chatbot.voice.audio.sample-rate:16000}") int sampleRate,
+            @Value("${chatbot.voice.audio.channels:1}") int channels,
+            @Value("${chatbot.voice.audio.frame-duration:60}") int frameDuration
+    ) {
+        return new XiaozhiAudioParams(format, sampleRate, channels, frameDuration);
     }
 
     @Bean

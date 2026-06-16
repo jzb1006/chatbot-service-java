@@ -51,6 +51,24 @@ public class XiaozhiServerEventFactory {
         return ttsState(sessionId, "stop");
     }
 
+    public String session(String sessionId, String conversationId) {
+        return objectMapper.createObjectNode()
+                .put("session_id", sessionId)
+                .put("type", "session")
+                .put("state", "ready")
+                .put("conversation_id", conversationId)
+                .toString();
+    }
+
+    public String error(String sessionId, String code, String message) {
+        return objectMapper.createObjectNode()
+                .put("session_id", sessionId)
+                .put("type", "error")
+                .put("code", code)
+                .put("message", message)
+                .toString();
+    }
+
     private String ttsState(String sessionId, String state) {
         return objectMapper.createObjectNode()
                 .put("session_id", sessionId)

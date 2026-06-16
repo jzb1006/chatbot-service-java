@@ -142,6 +142,20 @@ public class XiaozhiVoiceSessionService {
             log.info("xiaozhi wake word detected, sessionId={}, text={}", webSocketSession.getId(), message.text());
             return;
         }
+        if ("session".equals(message.type()) && "new".equals(message.state())) {
+            var conversationId = voiceSession.startNewConversation();
+            sendText(webSocketSession, eventFactory.session(voiceSession.sessionId(), conversationId));
+            log.info("xiaozhi conversation started, sessionId={}, deviceId={}, conversationId={}",
+                    webSocketSession.getId(), voiceSession.deviceId(), conversationId);
+            return;
+        }
+        if ("session".equals(message.type()) && "clear".equals(message.state())) {
+            var conversationId = voiceSession.clearConversation();
+            sendText(webSocketSession, eventFactory.session(voiceSession.sessionId(), conversationId));
+            log.info("xiaozhi conversation cleared, sessionId={}, deviceId={}, conversationId={}",
+                    webSocketSession.getId(), voiceSession.deviceId(), conversationId);
+            return;
+        }
         if ("abort".equals(message.type())) {
             voiceSession.markIdle();
             log.info("xiaozhi turn aborted, sessionId={}, deviceId={}, reason={}",
@@ -177,39 +191,42 @@ public class XiaozhiVoiceSessionService {
                     .toList();
             var audioFrameCount = audioFrames.size();
             var asrStartedAt = System.nanoTime();
-            var userText = speechToTextClient.transcribe(audioFrames);
+            var transcription = transcribe(webSocketSession, voiceSession, audioFrames, asrStartedAt);
             var asrMillis = elapsedMillis(asrStartedAt);
+            if (transcription.failed()) {
+                return;
+            }
+            var userText = transcription.text();
             if (userText == null || userText.isBlank()) {
                 log.warn("xiaozhi asr returned blank text, sessionId={}, deviceId={}, audioFrames={}, asrMillis={}",
                         webSocketSession.getId(), voiceSession.deviceId(), audioFrameCount, asrMillis);
+                trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "asr_empty", "未识别到语音"));
                 voiceSession.markIdle();
                 return;
             }
-            webSocketSession.sendMessage(new TextMessage(eventFactory.stt(voiceSession.sessionId(), userText)));
+            sendText(webSocketSession, eventFactory.stt(voiceSession.sessionId(), userText));
 
             var hermesStartedAt = System.nanoTime();
-            var response = hermesClient.chat(new HermesRequest(
-                    new DeviceId(voiceSession.deviceId()),
-                    new ConversationId("conv-" + voiceSession.deviceId()),
-                    userText
-            ), hermesClientConfig);
-            var reply = response.text();
+            var reply = chat(webSocketSession, voiceSession, userText);
+            if (reply == null) {
+                return;
+            }
             var hermesMillis = elapsedMillis(hermesStartedAt);
 
             voiceSession.markSpeaking();
-            webSocketSession.sendMessage(new TextMessage(eventFactory.llmEmotion(voiceSession.sessionId(), "neutral")));
-            webSocketSession.sendMessage(new TextMessage(eventFactory.ttsStart(voiceSession.sessionId())));
-            webSocketSession.sendMessage(new TextMessage(eventFactory.ttsSentenceStart(voiceSession.sessionId(), reply)));
+            sendText(webSocketSession, eventFactory.llmEmotion(voiceSession.sessionId(), "neutral"));
+            sendText(webSocketSession, eventFactory.ttsStart(voiceSession.sessionId()));
+            sendText(webSocketSession, eventFactory.ttsSentenceStart(voiceSession.sessionId(), reply));
             var ttsStartedAt = System.nanoTime();
             var synthesizedFrames = synthesizeSpeech(webSocketSession, voiceSession, reply, ttsStartedAt);
             if (synthesizedFrames == null) {
                 return;
             }
-            for (var frame : synthesizedFrames) {
-                webSocketSession.sendMessage(new BinaryMessage(frame));
+            if (!sendAudioFrames(webSocketSession, voiceSession, synthesizedFrames)) {
+                return;
             }
             var ttsMillis = elapsedMillis(ttsStartedAt);
-            webSocketSession.sendMessage(new TextMessage(eventFactory.ttsStop(voiceSession.sessionId())));
+            sendText(webSocketSession, eventFactory.ttsStop(voiceSession.sessionId()));
             log.info("xiaozhi turn completed, sessionId={}, deviceId={}, audioFrames={}, ttsFrames={}, asrMillis={}, hermesMillis={}, ttsMillis={}",
                     webSocketSession.getId(),
                     voiceSession.deviceId(),
@@ -219,12 +236,50 @@ public class XiaozhiVoiceSessionService {
                     hermesMillis,
                     ttsMillis);
             voiceSession.markIdle();
-        } catch (IOException exception) {
-            throw new IllegalStateException("Failed to send xiaozhi websocket message", exception);
         } catch (RuntimeException exception) {
             log.warn("xiaozhi turn failed, sessionId={}, deviceId={}, message={}",
                     webSocketSession.getId(), voiceSession.deviceId(), exception.getMessage(), exception);
             voiceSession.markIdle();
+        }
+    }
+
+    private Transcription transcribe(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            List<ByteBuffer> audioFrames,
+            long asrStartedAt
+    ) {
+        try {
+            return new Transcription(speechToTextClient.transcribe(audioFrames), false);
+        } catch (RuntimeException exception) {
+            log.warn("xiaozhi asr failed, sessionId={}, deviceId={}, asrMillis={}, message={}",
+                    webSocketSession.getId(),
+                    voiceSession.deviceId(),
+                    elapsedMillis(asrStartedAt),
+                    exception.getMessage(),
+                    exception);
+            trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "asr_failed", "语音识别失败"));
+            voiceSession.markIdle();
+            return new Transcription(null, true);
+        }
+    }
+
+    private String chat(WebSocketSession webSocketSession, XiaozhiVoiceSession voiceSession, String userText) {
+        try {
+            return hermesClient.chat(new HermesRequest(
+                    new DeviceId(voiceSession.deviceId()),
+                    new ConversationId(voiceSession.conversationId()),
+                    userText
+            ), hermesClientConfig).text();
+        } catch (RuntimeException exception) {
+            log.warn("xiaozhi hermes failed, sessionId={}, deviceId={}, message={}",
+                    webSocketSession.getId(),
+                    voiceSession.deviceId(),
+                    exception.getMessage(),
+                    exception);
+            trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "hermes_failed", "对话服务失败"));
+            voiceSession.markIdle();
+            return null;
         }
     }
 
@@ -233,7 +288,7 @@ public class XiaozhiVoiceSessionService {
             XiaozhiVoiceSession voiceSession,
             String reply,
             long ttsStartedAt
-    ) throws IOException {
+    ) {
         try {
             return textToSpeechClient.synthesize(reply, new VoiceId("default"));
         } catch (RuntimeException exception) {
@@ -243,9 +298,51 @@ public class XiaozhiVoiceSessionService {
                     elapsedMillis(ttsStartedAt),
                     exception.getMessage(),
                     exception);
-            webSocketSession.sendMessage(new TextMessage(eventFactory.ttsStop(voiceSession.sessionId())));
+            trySendText(webSocketSession, eventFactory.ttsStop(voiceSession.sessionId()));
+            trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "tts_failed", "语音合成失败"));
             voiceSession.markIdle();
             return null;
+        }
+    }
+
+    private boolean sendAudioFrames(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            List<ByteBuffer> frames
+    ) {
+        try {
+            for (var frame : frames) {
+                webSocketSession.sendMessage(new BinaryMessage(
+                        codec.encodeAudioFrame(voiceSession.protocolVersion(), 0, frame)
+                ));
+            }
+            return true;
+        } catch (IOException exception) {
+            log.warn("xiaozhi tts audio send failed, sessionId={}, deviceId={}, message={}",
+                    webSocketSession.getId(), voiceSession.deviceId(), exception.getMessage(), exception);
+            trySendText(webSocketSession, eventFactory.ttsStop(voiceSession.sessionId()));
+            trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "tts_failed", "语音下发失败"));
+            voiceSession.markIdle();
+            return false;
+        }
+    }
+
+    private void sendText(WebSocketSession webSocketSession, String payload) {
+        try {
+            webSocketSession.sendMessage(new TextMessage(payload));
+        } catch (IOException exception) {
+            throw new IllegalStateException("Failed to send xiaozhi websocket message", exception);
+        }
+    }
+
+    private boolean trySendText(WebSocketSession webSocketSession, String payload) {
+        try {
+            webSocketSession.sendMessage(new TextMessage(payload));
+            return true;
+        } catch (IOException exception) {
+            log.warn("failed to send xiaozhi websocket failure event, sessionId={}, message={}",
+                    webSocketSession.getId(), exception.getMessage(), exception);
+            return false;
         }
     }
 
@@ -262,5 +359,8 @@ public class XiaozhiVoiceSessionService {
         } catch (NumberFormatException exception) {
             return 1;
         }
+    }
+
+    private record Transcription(String text, boolean failed) {
     }
 }

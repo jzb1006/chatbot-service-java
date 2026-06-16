@@ -13,6 +13,11 @@ chatbot:
     default-voice-id: default
     websocket:
       token: ${XIAOZHI_WEBSOCKET_TOKEN:}
+    audio:
+      format: ${CHATBOT_VOICE_AUDIO_FORMAT:opus}
+      sample-rate: ${CHATBOT_VOICE_AUDIO_SAMPLE_RATE:16000}
+      channels: ${CHATBOT_VOICE_AUDIO_CHANNELS:1}
+      frame-duration: ${CHATBOT_VOICE_AUDIO_FRAME_DURATION:60}
     asr:
       provider: ${CHATBOT_VOICE_ASR_PROVIDER:fake}
       tencent:

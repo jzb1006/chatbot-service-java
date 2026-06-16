@@ -7,6 +7,7 @@ import com.jzb.chatbot.hermes.FakeHermesClient;
 import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
+import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
 import java.net.URI;
@@ -25,7 +26,7 @@ class XiaozhiWebSocketHandlerTest {
     void shouldNotSendHelloBeforeClientHello() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
         var sessionService = newSessionService(codec, "");
-        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var handler = new XiaozhiWebSocketHandler(codec, sessionService, XiaozhiAudioParams.defaults());
         var session = new TestWebSocketSession("ws-session-1");
 
         handler.afterConnectionEstablished(session);
@@ -37,7 +38,11 @@ class XiaozhiWebSocketHandlerTest {
     void shouldReplyServerHelloWhenClientHelloReceived() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
         var sessionService = newSessionService(codec, "");
-        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var handler = new XiaozhiWebSocketHandler(
+                codec,
+                sessionService,
+                new XiaozhiAudioParams("opus", 24000, 1, 60)
+        );
         var session = new TestWebSocketSession("ws-session-1");
         handler.afterConnectionEstablished(session);
 
@@ -60,6 +65,7 @@ class XiaozhiWebSocketHandlerTest {
         assertThat(session.getSentMessages().getFirst().getPayload().toString())
                 .contains("\"type\":\"hello\"")
                 .contains("\"audio_params\"")
+                .contains("\"sample_rate\":24000")
                 .doesNotContain("\"audio\"");
     }
 
@@ -67,7 +73,7 @@ class XiaozhiWebSocketHandlerTest {
     void shouldNotSendAckWhenListenStartReceived() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
         var sessionService = newSessionService(codec, "");
-        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var handler = new XiaozhiWebSocketHandler(codec, sessionService, XiaozhiAudioParams.defaults());
         var session = new TestWebSocketSession("ws-session-1");
         handler.afterConnectionEstablished(session);
         handler.handleMessage(session, new org.springframework.web.socket.TextMessage("""
@@ -103,7 +109,7 @@ class XiaozhiWebSocketHandlerTest {
     void shouldCloseSessionWhenInvalidJsonReceived() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
         var sessionService = newSessionService(codec, "");
-        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var handler = new XiaozhiWebSocketHandler(codec, sessionService, XiaozhiAudioParams.defaults());
         var session = new TestWebSocketSession("ws-session-1");
         handler.afterConnectionEstablished(session);
 
@@ -117,7 +123,7 @@ class XiaozhiWebSocketHandlerTest {
     void shouldCloseSessionWhenInvalidBinaryFrameReceived() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
         var sessionService = newSessionService(codec, "");
-        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var handler = new XiaozhiWebSocketHandler(codec, sessionService, XiaozhiAudioParams.defaults());
         var session = new TestWebSocketSession("ws-session-1");
         handler.afterConnectionEstablished(session);
         handler.handleMessage(session, new TextMessage("""
@@ -145,7 +151,7 @@ class XiaozhiWebSocketHandlerTest {
     void shouldRemoveSessionAfterConnectionClosed() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
         var sessionService = newSessionService(codec, "");
-        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var handler = new XiaozhiWebSocketHandler(codec, sessionService, XiaozhiAudioParams.defaults());
         var session = new TestWebSocketSession("ws-session-1");
         handler.afterConnectionEstablished(session);
 
@@ -158,7 +164,7 @@ class XiaozhiWebSocketHandlerTest {
     void shouldCloseSessionWhenRequiredTokenIsMissing() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
         var sessionService = newSessionService(codec, "expected-token");
-        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var handler = new XiaozhiWebSocketHandler(codec, sessionService, XiaozhiAudioParams.defaults());
         var session = new TestWebSocketSession("ws-session-1");
 
         handler.afterConnectionEstablished(session);
@@ -172,7 +178,7 @@ class XiaozhiWebSocketHandlerTest {
     void shouldCloseSessionWhenRequiredTokenDoesNotMatch() throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
         var sessionService = newSessionService(codec, "expected-token");
-        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var handler = new XiaozhiWebSocketHandler(codec, sessionService, XiaozhiAudioParams.defaults());
         var headers = new HttpHeaders();
         headers.setBearerAuth("wrong-token");
         var session = new TestWebSocketSession(
@@ -193,7 +199,7 @@ class XiaozhiWebSocketHandlerTest {
     void shouldAcceptBearerOrRawTokenWhenRequiredTokenMatches(String authorization) throws Exception {
         var codec = new XiaozhiMessageCodec(new ObjectMapper());
         var sessionService = newSessionService(codec, "expected-token");
-        var handler = new XiaozhiWebSocketHandler(codec, sessionService);
+        var handler = new XiaozhiWebSocketHandler(codec, sessionService, XiaozhiAudioParams.defaults());
         var headers = new HttpHeaders();
         headers.set(HttpHeaders.AUTHORIZATION, authorization);
         headers.set("Device-Id", "device-1");

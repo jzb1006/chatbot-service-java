@@ -31,6 +31,8 @@ public class XiaozhiVoiceSession {
     private String authorization;
     private String deviceId;
     private String clientId;
+    private String conversationId;
+    private long conversationSequence;
 
     public XiaozhiVoiceSession(String sessionId) {
         this.sessionId = sessionId;
@@ -58,6 +60,29 @@ public class XiaozhiVoiceSession {
 
     public String clientId() {
         return clientId;
+    }
+
+    public String conversationId() {
+        if (conversationId == null || conversationId.isBlank()) {
+            conversationId = defaultConversationId();
+        }
+        return conversationId;
+    }
+
+    public String startNewConversation() {
+        conversationSequence++;
+        conversationId = defaultConversationId() + "-" + sessionId + "-" + conversationSequence;
+        audioFrames.clear();
+        state = State.IDLE;
+        return conversationId;
+    }
+
+    public String clearConversation() {
+        conversationId = defaultConversationId();
+        conversationSequence = 0;
+        audioFrames.clear();
+        state = State.IDLE;
+        return conversationId;
     }
 
     public void updateProtocolVersion(int protocolVersion) {
@@ -101,5 +126,9 @@ public class XiaozhiVoiceSession {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private String defaultConversationId() {
+        return "conv-" + deviceId();
     }
 }

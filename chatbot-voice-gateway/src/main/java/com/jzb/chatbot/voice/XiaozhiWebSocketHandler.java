@@ -1,6 +1,7 @@
 package com.jzb.chatbot.voice;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiProtocolException;
 import java.io.IOException;
@@ -30,6 +31,7 @@ public class XiaozhiWebSocketHandler extends AbstractWebSocketHandler {
 
     private final XiaozhiMessageCodec codec;
     private final XiaozhiVoiceSessionService sessionService;
+    private final XiaozhiAudioParams audioParams;
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
@@ -49,7 +51,7 @@ public class XiaozhiWebSocketHandler extends AbstractWebSocketHandler {
             if (HELLO_TYPE.equals(clientMessage.type())) {
                 var clientHello = codec.decodeClientHello(message.getPayload());
                 sessionService.handleHello(session, clientHello);
-                session.sendMessage(new TextMessage(codec.encodeServerHello(session.getId())));
+                session.sendMessage(new TextMessage(codec.encodeServerHello(session.getId(), audioParams)));
                 return;
             }
             sessionService.handleText(session, clientMessage);

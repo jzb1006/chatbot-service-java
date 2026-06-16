@@ -17,4 +17,13 @@ class XiaozhiServerEventFactoryTest {
         assertThat(json).contains("\"state\":\"sentence_start\"");
         assertThat(json).contains("\"text\":\"pong\"");
     }
+
+    @Test
+    void shouldBuildErrorEvent() {
+        var json = factory.error("s1", "asr_empty", "未识别到语音");
+
+        assertThat(json).contains("\"type\":\"error\"");
+        assertThat(json).contains("\"code\":\"asr_empty\"");
+        assertThat(json).contains("\"message\":\"未识别到语音\"");
+    }
 }

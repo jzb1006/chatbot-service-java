@@ -108,7 +108,7 @@ class TestWebSocketSession implements WebSocketSession {
     }
 
     @Override
-    public void sendMessage(WebSocketMessage<?> message) {
+    public void sendMessage(WebSocketMessage<?> message) throws IOException {
         sentMessages.add(message);
     }
 

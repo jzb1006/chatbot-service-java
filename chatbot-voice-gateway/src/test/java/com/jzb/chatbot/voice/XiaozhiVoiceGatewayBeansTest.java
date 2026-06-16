@@ -10,6 +10,7 @@ import com.jzb.chatbot.speech.SpeechToTextClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextClient;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
 import com.jzb.chatbot.speech.TextToSpeechClient;
+import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -71,6 +72,25 @@ class XiaozhiVoiceGatewayBeansTest {
 
             assertThat(client).isInstanceOf(FakeSpeechToTextClient.class);
         });
+    }
+
+    @Test
+    void shouldCreateConfiguredXiaozhiAudioParams() {
+        contextRunner
+                .withPropertyValues(
+                        "chatbot.voice.audio.format=opus",
+                        "chatbot.voice.audio.sample-rate=24000",
+                        "chatbot.voice.audio.channels=1",
+                        "chatbot.voice.audio.frame-duration=60"
+                )
+                .run(context -> {
+                    var params = context.getBean(XiaozhiAudioParams.class);
+
+                    assertThat(params.format()).isEqualTo("opus");
+                    assertThat(params.sampleRate()).isEqualTo(24000);
+                    assertThat(params.channels()).isEqualTo(1);
+                    assertThat(params.frameDuration()).isEqualTo(60);
+                });
     }
 
     @Test

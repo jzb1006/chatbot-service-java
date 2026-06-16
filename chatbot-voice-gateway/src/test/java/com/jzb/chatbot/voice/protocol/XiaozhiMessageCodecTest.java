@@ -23,6 +23,17 @@ class XiaozhiMessageCodecTest {
     }
 
     @Test
+    void shouldBuildServerHelloWithConfiguredAudioParams() throws Exception {
+        var params = new XiaozhiAudioParams("opus", 24000, 1, 60);
+
+        var json = codec.encodeServerHello("audio-1", params);
+
+        assertThat(json).contains("\"sample_rate\":24000");
+        assertThat(json).contains("\"channels\":1");
+        assertThat(json).contains("\"frame_duration\":60");
+    }
+
+    @Test
     void shouldParseClientHello() throws Exception {
         var message = """
                 {
@@ -77,6 +88,13 @@ class XiaozhiMessageCodecTest {
     }
 
     @Test
+    void shouldEncodeBinaryV1AsRawOpusPayload() {
+        var encoded = codec.encodeAudioFrame(1, 1234, ByteBuffer.wrap(new byte[] {1, 2, 3}));
+
+        assertThat(toBytes(encoded)).containsExactly(1, 2, 3);
+    }
+
+    @Test
     void shouldDecodeBinaryV2Header() {
         var payload = ByteBuffer.allocate(16 + 3);
         payload.putShort((short) 2);
@@ -95,6 +113,19 @@ class XiaozhiMessageCodecTest {
     }
 
     @Test
+    void shouldEncodeBinaryV2Header() {
+        var encoded = codec.encodeAudioFrame(2, 1234, ByteBuffer.wrap(new byte[] {4, 5, 6}));
+        var buffer = encoded.slice();
+
+        assertThat(Short.toUnsignedInt(buffer.getShort())).isEqualTo(2);
+        assertThat(Short.toUnsignedInt(buffer.getShort())).isZero();
+        assertThat(buffer.getInt()).isZero();
+        assertThat(Integer.toUnsignedLong(buffer.getInt())).isEqualTo(1234L);
+        assertThat(buffer.getInt()).isEqualTo(3);
+        assertThat(toBytes(buffer)).containsExactly(4, 5, 6);
+    }
+
+    @Test
     void shouldDecodeBinaryV3Header() {
         var payload = ByteBuffer.allocate(4 + 2);
         payload.put((byte) 0);
@@ -108,5 +139,23 @@ class XiaozhiMessageCodecTest {
         assertThat(frame.version()).isEqualTo(3);
         assertThat(frame.timestamp()).isZero();
         assertThat(frame.payload()).containsExactly(7, 8);
+    }
+
+    @Test
+    void shouldEncodeBinaryV3Header() {
+        var encoded = codec.encodeAudioFrame(3, 1234, ByteBuffer.wrap(new byte[] {7, 8}));
+        var buffer = encoded.slice();
+
+        assertThat(Byte.toUnsignedInt(buffer.get())).isZero();
+        assertThat(Byte.toUnsignedInt(buffer.get())).isZero();
+        assertThat(Short.toUnsignedInt(buffer.getShort())).isEqualTo(2);
+        assertThat(toBytes(buffer)).containsExactly(7, 8);
+    }
+
+    private byte[] toBytes(ByteBuffer buffer) {
+        var input = buffer.slice();
+        var bytes = new byte[input.remaining()];
+        input.get(bytes);
+        return bytes;
     }
 }

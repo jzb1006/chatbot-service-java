@@ -24,11 +24,22 @@ public record XiaozhiServerHello(
      * @return hello 消息
      */
     public static XiaozhiServerHello websocket(String sessionId) {
+        return websocket(sessionId, XiaozhiAudioParams.defaults());
+    }
+
+    /**
+     * 创建 WebSocket hello 消息。
+     *
+     * @param sessionId 会话标识
+     * @param audioParams 音频参数
+     * @return hello 消息
+     */
+    public static XiaozhiServerHello websocket(String sessionId, XiaozhiAudioParams audioParams) {
         return new XiaozhiServerHello(
                 "hello",
                 "websocket",
                 sessionId,
-                XiaozhiAudioParams.defaults()
+                audioParams == null ? XiaozhiAudioParams.defaults() : audioParams
         );
     }
 }
