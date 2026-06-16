@@ -2,6 +2,7 @@ package com.jzb.chatbot.speech;
 
 import com.jzb.chatbot.common.id.VoiceId;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 
@@ -16,6 +17,7 @@ import java.util.List;
 public class TencentCloudTextToSpeechClient implements TextToSpeechClient {
 
     private static final int OPUS_FRAME_DURATION_MS = 60;
+    private static final int MAX_TEXT_CODE_POINTS = 150;
 
     private final TencentCloudTextToSpeechConfig config;
     private final TencentTextToVoiceApi textToVoiceApi;
@@ -34,14 +36,19 @@ public class TencentCloudTextToSpeechClient implements TextToSpeechClient {
         if (text == null || text.isBlank()) {
             return List.of();
         }
-        var audio = textToVoiceApi.synthesize(new TencentTextToVoiceRequest(
-                text,
-                resolveVoiceType(voiceId),
-                config.codec(),
-                config.sampleRate()
-        ));
-        var pcm = Base64.getDecoder().decode(audio);
-        return PcmToOpusEncoder.encode(pcm, config.sampleRate(), OPUS_FRAME_DURATION_MS);
+        var voiceType = resolveVoiceType(voiceId);
+        var frames = new ArrayList<ByteBuffer>();
+        for (var chunk : splitText(text)) {
+            var audio = textToVoiceApi.synthesize(new TencentTextToVoiceRequest(
+                    chunk,
+                    voiceType,
+                    config.codec(),
+                    config.sampleRate()
+            ));
+            var pcm = Base64.getDecoder().decode(audio);
+            frames.addAll(PcmToOpusEncoder.encode(pcm, config.sampleRate(), OPUS_FRAME_DURATION_MS));
+        }
+        return List.copyOf(frames);
     }
 
     private String resolveVoiceType(VoiceId voiceId) {
@@ -49,5 +56,26 @@ public class TencentCloudTextToSpeechClient implements TextToSpeechClient {
             return config.voiceType();
         }
         return voiceId.value();
+    }
+
+    private List<String> splitText(String text) {
+        var chunks = new ArrayList<String>();
+        var chunk = new StringBuilder();
+        var codePoints = 0;
+        for (var offset = 0; offset < text.length(); ) {
+            var codePoint = text.codePointAt(offset);
+            if (codePoints >= MAX_TEXT_CODE_POINTS) {
+                chunks.add(chunk.toString());
+                chunk.setLength(0);
+                codePoints = 0;
+            }
+            chunk.appendCodePoint(codePoint);
+            codePoints++;
+            offset += Character.charCount(codePoint);
+        }
+        if (!chunk.isEmpty()) {
+            chunks.add(chunk.toString());
+        }
+        return chunks;
     }
 }
