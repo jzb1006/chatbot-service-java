@@ -31,7 +31,7 @@ public class TencentCloudSpeechToTextClient implements SpeechToTextClient {
         if (audioFrames == null || audioFrames.isEmpty()) {
             return "";
         }
-        var audio = combine(audioFrames);
+        var audio = resolveAudio(audioFrames);
         if (audio.length == 0) {
             return "";
         }
@@ -42,6 +42,13 @@ public class TencentCloudSpeechToTextClient implements SpeechToTextClient {
                 config.voiceFormat(),
                 config.sampleRate()
         ));
+    }
+
+    private byte[] resolveAudio(List<ByteBuffer> audioFrames) {
+        if ("pcm".equalsIgnoreCase(config.voiceFormat())) {
+            return OpusToPcmDecoder.decode(audioFrames, config.sampleRate());
+        }
+        return combine(audioFrames);
     }
 
     private byte[] combine(List<ByteBuffer> audioFrames) {

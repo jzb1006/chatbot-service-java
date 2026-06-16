@@ -21,7 +21,7 @@ chatbot:
         region: ap-guangzhou
         endpoint: asr.tencentcloudapi.com
         engine-model-type: ${TENCENT_CLOUD_ASR_ENGINE_MODEL_TYPE:16k_zh}
-        voice-format: opus
+        voice-format: ${TENCENT_CLOUD_ASR_VOICE_FORMAT:pcm}
         sample-rate: 16000
         timeout-seconds: 15
     tts:

@@ -45,7 +45,7 @@ public class XiaozhiVoiceGatewayBeans {
             @Value("${chatbot.voice.asr.tencent.region:ap-guangzhou}") String region,
             @Value("${chatbot.voice.asr.tencent.endpoint:asr.tencentcloudapi.com}") String endpoint,
             @Value("${chatbot.voice.asr.tencent.engine-model-type:16k_zh}") String engineModelType,
-            @Value("${chatbot.voice.asr.tencent.voice-format:opus}") String voiceFormat,
+            @Value("${chatbot.voice.asr.tencent.voice-format:pcm}") String voiceFormat,
             @Value("${chatbot.voice.asr.tencent.sample-rate:16000}") int sampleRate,
             @Value("${chatbot.voice.asr.tencent.timeout-seconds:15}") int timeoutSeconds
     ) {

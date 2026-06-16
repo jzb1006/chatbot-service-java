@@ -24,7 +24,7 @@ public record TencentCloudSpeechToTextConfig(
     private static final String DEFAULT_ENDPOINT = "asr.tencentcloudapi.com";
     private static final String DEFAULT_REGION = "ap-guangzhou";
     private static final String DEFAULT_ENGINE_MODEL_TYPE = "16k_zh";
-    private static final String DEFAULT_VOICE_FORMAT = "opus";
+    private static final String DEFAULT_VOICE_FORMAT = "pcm";
     private static final int DEFAULT_SAMPLE_RATE = 16000;
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(15);
 

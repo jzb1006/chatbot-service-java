@@ -505,3 +505,83 @@ TTS 播放结果：
 失败现象与日志位置：
 下一步处理：
 ```
+
+### 2026-06-16 公网 WebSocket smoke
+
+```text
+测试时间：2026-06-16 08:04:34 +08:00
+部署版本 / Git commit：cf00744；远程镜像 sha256:bb472626accb098d884efc5367829eb1542fda626d32c1cd2219953042332cb1
+服务器地址：203.195.202.54:8766
+WebSocket 路径：/xiaozhi/v1、/ws/xiaozhi/v1、/ws/xiaozhi/v1/
+固件设备 ID：smoke-device-1
+Client ID：smoke-client-1
+token 鉴权结果：当前远程未配置 XIAOZHI_WEBSOCKET_TOKEN，authRequired=false，连接通过
+设备 hello / server hello：通过；server hello 返回 audio_params(format=opus, sample_rate=16000, channels=1, frame_duration=60)
+ASR 识别文本：ping（当前远程未配置 CHATBOT_VOICE_ASR_PROVIDER=tencent，走 Fake ASR）
+Hermes 回复摘要：pong
+TTS 播放结果：公网 smoke 收到 tts.start、tts.sentence_start、17 个二进制音频帧、tts.stop；未做真机扬声器播放验收
+最终结论：公网 WebSocket 软件链路通过；真机 TTS 播放验收仍未完成
+失败现象与日志位置：首次重启后 3 秒 health 检查出现一次连接 reset，随后 /actuator/health 返回 UP；容器日志见 device_gateway
+下一步处理：硬件到位后使用小智真机连接 ws://203.195.202.54:8766/xiaozhi/v1，补充真实麦克风 ASR 与扬声器播放记录
+```
+
+### 2026-06-16 远程 ASR 配置切换
+
+```text
+测试时间：2026-06-16 08:44:53 +08:00
+部署版本 / Git commit：cf00744；远程镜像 sha256:bb472626accb098d884efc5367829eb1542fda626d32c1cd2219953042332cb1
+服务器地址：203.195.202.54:8766
+配置变更：/opt/chatbot-service-java-runtime/chatbot-service.env 增加 CHATBOT_VOICE_ASR_PROVIDER=tencent、TENCENT_CLOUD_ASR_ENGINE_MODEL_TYPE=16k_zh
+配置备份：/opt/chatbot-service-java-runtime/backups/chatbot-service.env.20260616084252
+WebSocket 路径：/xiaozhi/v1
+固件设备 ID：asr-config-probe
+Client ID：asr-config-probe
+token 鉴权结果：当前远程未配置 XIAOZHI_WEBSOCKET_TOKEN，authRequired=false，连接通过
+设备 hello / server hello：通过；server hello 返回 audio_params(format=opus, sample_rate=16000, channels=1, frame_duration=60)
+ASR 识别文本：未发送音频，不触发真实 ASR 调用
+Hermes 回复摘要：未触发
+TTS 播放结果：未触发
+最终结论：远程已切换为腾讯云真实 ASR Provider，服务启动与 WebSocket 握手正常
+失败现象与日志位置：第一次手写探针帧长度编码错误，产生一条 invalid control frame；修正探针后 hello 验证通过，容器日志见 device_gateway
+下一步处理：使用真实小智设备或有效 Opus 音频样本执行 listen.stop，验证腾讯云 ASR 真实识别结果
+```
+
+### 2026-06-16 真实 ASR 调用测试
+
+```text
+测试时间：2026-06-16 08:53:24 +08:00
+部署版本 / Git commit：cf00744；远程镜像 sha256:bb472626accb098d884efc5367829eb1542fda626d32c1cd2219953042332cb1
+服务器地址：203.195.202.54:8766
+WebSocket 路径：/xiaozhi/v1
+固件设备 ID：real-asr-opus-test
+Client ID：real-asr-opus-test
+token 鉴权结果：当前远程未配置 XIAOZHI_WEBSOCKET_TOKEN，authRequired=false，连接通过
+设备 hello / server hello：通过；server hello 返回 audio_params(format=opus, sample_rate=16000, channels=1, frame_duration=60)
+ASR 识别文本：未返回识别文本；腾讯云 ASR 拒绝 VoiceFormat=opus
+Hermes 回复摘要：未触发
+TTS 播放结果：未触发
+最终结论：真实 ASR 调用已触发，但当前服务端 ASR 配置/封装不符合腾讯云一句话识别要求；服务本身仍保持 UP
+失败现象与日志位置：device_gateway 日志报 TencentCloudSDKException: SentenceRecognitionReqNoData.VoiceFormat: opus not in list: [mp3,wav,pcm,m4a,speex,silk,aac,ogg-opus,amr]
+下一步处理：将 ASR voice-format 改为腾讯云支持的 ogg-opus，并补齐小智裸 Opus 帧到 Ogg Opus/PCM 的服务端转换；或改用腾讯云实时语音识别接口处理裸 Opus 流
+```
+
+### 2026-06-16 真实 ASR 修复后公网全链路测试
+
+```text
+测试时间：2026-06-16 09:15:46 +08:00
+部署版本 / Git commit：cf00744（本地未提交改动）；远程镜像 sha256:63f456d8b1846878efc1e300b210c3b6f1a6573e29a10270bab58eddb27f0365
+服务器地址：203.195.202.54:8766
+配置变更：远程 /opt/chatbot-service-java-runtime/chatbot-service.env 明确 TENCENT_CLOUD_ASR_VOICE_FORMAT=pcm；权限 600
+配置备份：/opt/chatbot-service-java-runtime/backups/chatbot-service.env.20260616091440
+WebSocket 路径：/xiaozhi/v1
+固件设备 ID：real-asr-pcm-decode-test-2
+Client ID：real-asr-pcm-decode-test-2
+token 鉴权结果：当前远程未配置 XIAOZHI_WEBSOCKET_TOKEN，authRequired=false，连接通过
+设备 hello / server hello：通过；server hello 返回 audio_params(format=opus, sample_rate=16000, channels=1, frame_duration=60)
+ASR 识别文本：你好，小智，请回答，今天天气怎么样？
+Hermes 回复摘要：Hermes 正常回复，说明“我是 Hermes Agent”，并提示需要城市才能查询天气
+TTS 播放结果：收到 tts.start、tts.sentence_start、445 个二进制 TTS 音频帧、tts.stop
+最终结论：公网 WebSocket 软件链路通过；小智裸 Opus 上行已由服务端解码为 16k PCM 并成功调用腾讯云一句话识别，随后 Hermes 与腾讯云 TTS 全链路完成
+失败现象与日志位置：修复前曾出现 input sample rate not supported；修复后 device_gateway 日志显示 xiaozhi turn completed, audioFrames=65, ttsFrames=445, asrMillis=445, hermesMillis=3617, ttsMillis=8867
+下一步处理：硬件到位后用真实小智设备复测麦克风采集质量与扬声器播放效果；软件公网链路已通过
+```

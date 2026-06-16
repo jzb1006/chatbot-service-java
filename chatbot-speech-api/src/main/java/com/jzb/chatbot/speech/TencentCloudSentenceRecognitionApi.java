@@ -37,19 +37,30 @@ class TencentCloudSentenceRecognitionApi implements TencentSentenceRecognitionAp
     @Override
     public String recognize(TencentSentenceRecognitionRequest request) {
         try {
-            var sdkRequest = new SentenceRecognitionRequest();
-            sdkRequest.setSourceType(SOURCE_TYPE_BASE64);
-            sdkRequest.setSubServiceType(SUB_SERVICE_TYPE_SENTENCE);
-            sdkRequest.setEngSerViceType(request.engineModelType());
-            sdkRequest.setVoiceFormat(request.voiceFormat());
-            sdkRequest.setInputSampleRate((long) request.sampleRate());
-            sdkRequest.setUsrAudioKey(UUID.randomUUID().toString());
-            sdkRequest.setData(request.audio());
-            sdkRequest.setDataLen((long) request.audioBytes());
+            var sdkRequest = toSdkRequest(request);
             var response = client.SentenceRecognition(sdkRequest);
             return response.getResult();
         } catch (TencentCloudSDKException exception) {
             throw new IllegalStateException("Tencent Cloud ASR request failed", exception);
         }
+    }
+
+    static SentenceRecognitionRequest toSdkRequest(TencentSentenceRecognitionRequest request) {
+        var sdkRequest = new SentenceRecognitionRequest();
+        sdkRequest.setSourceType(SOURCE_TYPE_BASE64);
+        sdkRequest.setSubServiceType(SUB_SERVICE_TYPE_SENTENCE);
+        sdkRequest.setEngSerViceType(request.engineModelType());
+        sdkRequest.setVoiceFormat(request.voiceFormat());
+        if (isPcm8k(request)) {
+            sdkRequest.setInputSampleRate((long) request.sampleRate());
+        }
+        sdkRequest.setUsrAudioKey(UUID.randomUUID().toString());
+        sdkRequest.setData(request.audio());
+        sdkRequest.setDataLen((long) request.audioBytes());
+        return sdkRequest;
+    }
+
+    private static boolean isPcm8k(TencentSentenceRecognitionRequest request) {
+        return "pcm".equalsIgnoreCase(request.voiceFormat()) && request.sampleRate() == 8000;
     }
 }
