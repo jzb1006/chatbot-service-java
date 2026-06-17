@@ -2,6 +2,8 @@ package com.jzb.chatbot.voice;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.common.id.ConversationId;
 import com.jzb.chatbot.common.id.VoiceId;
@@ -28,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.WebSocketMessage;
@@ -145,6 +148,39 @@ class XiaozhiVoiceSessionServiceTest {
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"stop\""));
         assertThat(session.getSentMessages())
                 .anySatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
+    }
+
+    @Test
+    void shouldLogConversationTextWhenTurnCompletes() {
+        var logger = (Logger) LoggerFactory.getLogger(XiaozhiVoiceSessionService.class);
+        var appender = new ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            var session = openSession();
+            service.handleText(session, new XiaozhiClientMessage(
+                    "listen", "start", "manual", null, null, "ws-session-1", null
+            ));
+            service.handleBinary(session, ByteBuffer.wrap(new byte[] {1, 2, 3}));
+
+            service.handleText(session, new XiaozhiClientMessage(
+                    "listen", "stop", null, null, null, "ws-session-1", null
+            ));
+
+            assertThat(appender.list)
+                    .extracting(event -> event.getFormattedMessage())
+                    .anySatisfy(message -> assertThat(message)
+                            .contains(
+                                    "xiaozhi conversation turn",
+                                    "sessionId=ws-session-1",
+                                    "deviceId=ws-session-1",
+                                    "conversationId=conv-ws-session-1",
+                                    "userText=ping",
+                                    "assistantText=pong"
+                            ));
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     @Test

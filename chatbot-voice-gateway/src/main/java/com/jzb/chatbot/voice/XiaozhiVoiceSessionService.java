@@ -220,6 +220,12 @@ public class XiaozhiVoiceSessionService {
                 return;
             }
             var hermesMillis = elapsedMillis(hermesStartedAt);
+            log.info("xiaozhi conversation turn, sessionId={}, deviceId={}, conversationId={}, userText={}, assistantText={}",
+                    webSocketSession.getId(),
+                    voiceSession.deviceId(),
+                    voiceSession.conversationId(),
+                    userText,
+                    reply);
 
             voiceSession.markSpeaking();
             sendText(webSocketSession, eventFactory.llmEmotion(voiceSession.sessionId(), "neutral"));
