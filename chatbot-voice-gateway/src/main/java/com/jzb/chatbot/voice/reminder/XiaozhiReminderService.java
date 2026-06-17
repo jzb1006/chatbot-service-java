@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 /**
@@ -72,6 +73,16 @@ public class XiaozhiReminderService {
             throw new IllegalArgumentException("delaySeconds must not be negative");
         }
         return create(deviceId, message, Instant.now().plusSeconds(delaySeconds).toString());
+    }
+
+    /**
+     * 监听语音会话解析出的提醒请求。
+     *
+     * @param event 提醒请求事件
+     */
+    @EventListener
+    public void handleReminderRequested(XiaozhiReminderRequestedEvent event) {
+        createAfter(event.deviceId(), event.message(), event.delaySeconds());
     }
 
     private void fire(CreatedReminder reminder) {

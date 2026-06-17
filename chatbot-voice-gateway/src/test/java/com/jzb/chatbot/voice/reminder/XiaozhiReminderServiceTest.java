@@ -22,4 +22,24 @@ class XiaozhiReminderServiceTest {
         assertThat(reminder.message()).isEqualTo("提醒我喝水");
         then(sessionService).should(timeout(1000)).notifyDevice("device-1", "提醒我喝水");
     }
+
+    @Test
+    void shouldParseRelativeReminderIntent() {
+        var intent = XiaozhiReminderIntent.parse("一分钟后提醒我喝水。");
+
+        assertThat(intent).isNotNull();
+        assertThat(intent.message()).isEqualTo("喝水");
+        assertThat(intent.delaySeconds()).isEqualTo(60L);
+        assertThat(intent.confirmationText()).isEqualTo("一分钟后提醒你喝水");
+    }
+
+    @Test
+    void shouldParseTypoMinuteReminderIntent() {
+        var intent = XiaozhiReminderIntent.parse("一分钟钟后提醒我喝水");
+
+        assertThat(intent).isNotNull();
+        assertThat(intent.message()).isEqualTo("喝水");
+        assertThat(intent.delaySeconds()).isEqualTo(60L);
+        assertThat(intent.confirmationText()).isEqualTo("一分钟后提醒你喝水");
+    }
 }

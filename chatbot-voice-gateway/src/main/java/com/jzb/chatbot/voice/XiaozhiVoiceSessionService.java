@@ -13,6 +13,8 @@ import com.jzb.chatbot.voice.protocol.XiaozhiClientHello;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
+import com.jzb.chatbot.voice.reminder.XiaozhiReminderIntent;
+import com.jzb.chatbot.voice.reminder.XiaozhiReminderRequestedEvent;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
@@ -20,6 +22,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.ApplicationEventPublisherAware;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.stereotype.Service;
 import org.springframework.web.socket.WebSocketSession;
@@ -35,7 +39,7 @@ import org.springframework.web.socket.WebSocketSession;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class XiaozhiVoiceSessionService {
+public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAware {
 
     private static final String AUTHORIZATION_HEADER = "Authorization";
     private static final String PROTOCOL_VERSION_HEADER = "Protocol-Version";
@@ -53,6 +57,13 @@ public class XiaozhiVoiceSessionService {
     private final Map<String, XiaozhiVoiceSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> webSocketSessions = new ConcurrentHashMap<>();
     private final Map<String, String> deviceSessionIds = new ConcurrentHashMap<>();
+    private ApplicationEventPublisher eventPublisher = event -> {
+    };
+
+    @Override
+    public void setApplicationEventPublisher(ApplicationEventPublisher eventPublisher) {
+        this.eventPublisher = eventPublisher;
+    }
 
     /**
      * 打开新的语音会话。
@@ -263,6 +274,12 @@ public class XiaozhiVoiceSessionService {
             }
             sendText(webSocketSession, eventFactory.stt(voiceSession.sessionId(), userText));
 
+            var reminderIntent = XiaozhiReminderIntent.parse(userText);
+            if (reminderIntent != null) {
+                scheduleReminder(webSocketSession, voiceSession, reminderIntent, audioFrameCount, asrMillis);
+                return;
+            }
+
             var turnStartedAt = System.nanoTime();
             var result = streamChatAndSpeak(webSocketSession, voiceSession, userText, audioFrameCount, asrMillis, turnStartedAt);
             if (result.failed()) {
@@ -278,6 +295,35 @@ public class XiaozhiVoiceSessionService {
             log.warn("xiaozhi turn failed, sessionId={}, deviceId={}, message={}",
                     webSocketSession.getId(), voiceSession.deviceId(), exception.getMessage(), exception);
             voiceSession.markIdle();
+        }
+    }
+
+    private void scheduleReminder(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiReminderIntent reminderIntent,
+            int audioFrameCount,
+            long asrMillis
+    ) {
+        eventPublisher.publishEvent(new XiaozhiReminderRequestedEvent(
+                voiceSession.deviceId(),
+                reminderIntent.message(),
+                reminderIntent.delaySeconds()
+        ));
+        var turnStartedAt = System.nanoTime();
+        var ttsStartedAt = System.nanoTime();
+        var playback = new XiaozhiTtsPlayback(webSocketSession, voiceSession, codec, eventFactory);
+        voiceSession.updatePlayback(playback);
+        try {
+            voiceSession.markSpeaking();
+            sendText(webSocketSession, eventFactory.llmEmotion(voiceSession.sessionId(), "neutral"));
+            sendText(webSocketSession, eventFactory.ttsStart(voiceSession.sessionId()));
+            speakSentences(webSocketSession, voiceSession, playback, List.of(reminderIntent.confirmationText()), ttsStartedAt);
+            finishPlayback(webSocketSession, voiceSession, playback, audioFrameCount, asrMillis, turnStartedAt, ttsStartedAt);
+            log.info("xiaozhi reminder scheduled, sessionId={}, deviceId={}, delaySeconds={}, message={}",
+                    webSocketSession.getId(), voiceSession.deviceId(), reminderIntent.delaySeconds(), reminderIntent.message());
+        } finally {
+            voiceSession.updatePlayback(null);
         }
     }
 

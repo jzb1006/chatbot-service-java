@@ -22,15 +22,18 @@ import com.jzb.chatbot.voice.protocol.XiaozhiClientHello;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
+import com.jzb.chatbot.voice.reminder.XiaozhiReminderRequestedEvent;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.WebSocketMessage;
@@ -606,6 +609,38 @@ class XiaozhiVoiceSessionServiceTest {
         assertThat(serviceWithFailingTts.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
     }
 
+    @Test
+    void shouldScheduleRelativeReminderBeforeCallingHermes() {
+        var eventPublisher = new RecordingApplicationEventPublisher();
+        var serviceWithReminderIntent = new XiaozhiVoiceSessionService(
+                codec,
+                new FixedSpeechToTextClient("一分钟后提醒我喝水"),
+                new FailingHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiServerEventFactory(new ObjectMapper()),
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge()
+        );
+        serviceWithReminderIntent.setApplicationEventPublisher(eventPublisher);
+        var session = openSession(serviceWithReminderIntent);
+
+        runSingleTurn(serviceWithReminderIntent, session);
+
+        assertThat(eventPublisher.events())
+                .singleElement()
+                .isInstanceOfSatisfying(XiaozhiReminderRequestedEvent.class, event -> {
+                    assertThat(event.deviceId()).isEqualTo("ws-session-1");
+                    assertThat(event.message()).isEqualTo("喝水");
+                    assertThat(event.delaySeconds()).isEqualTo(60L);
+                });
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload)
+                        .contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "一分钟后提醒你喝水"));
+    }
+
     private TestWebSocketSession openSession() {
         return openSession(service);
     }
@@ -800,6 +835,28 @@ class XiaozhiVoiceSessionServiceTest {
         @Override
         public List<ByteBuffer> synthesize(String text, VoiceId voiceId) {
             throw new IllegalStateException("tts unavailable");
+        }
+    }
+
+    private record FixedSpeechToTextClient(String text) implements SpeechToTextClient {
+
+        @Override
+        public String transcribe(List<ByteBuffer> audioFrames) {
+            return text;
+        }
+    }
+
+    private static class RecordingApplicationEventPublisher implements ApplicationEventPublisher {
+
+        private final ArrayList<Object> events = new ArrayList<>();
+
+        @Override
+        public void publishEvent(Object event) {
+            events.add(event);
+        }
+
+        private List<Object> events() {
+            return List.copyOf(events);
         }
     }
 
