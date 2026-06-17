@@ -5,10 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
+import com.jzb.chatbot.speech.FakeStreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
 import com.jzb.chatbot.speech.SpeechToTextClient;
+import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextClient;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
+import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextClient;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpAdminAuth;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
@@ -76,6 +79,27 @@ class XiaozhiVoiceGatewayBeansTest {
     }
 
     @Test
+    void shouldUseFakeStreamingSpeechToTextByDefault() {
+        contextRunner.run(context -> {
+            var clients = context.getBeansOfType(StreamingSpeechToTextClient.class);
+
+            assertThat(clients).hasSize(1);
+            assertThat(clients.values()).singleElement().isInstanceOf(FakeStreamingSpeechToTextClient.class);
+        });
+    }
+
+    @Test
+    void shouldCreateStreamingXiaozhiAsrMode() {
+        contextRunner
+                .withPropertyValues("chatbot.voice.asr.mode=streaming")
+                .run(context -> {
+                    var mode = context.getBean(XiaozhiAsrMode.class);
+
+                    assertThat(mode.streaming()).isTrue();
+                });
+    }
+
+    @Test
     void shouldCreateConfiguredXiaozhiAudioParams() {
         contextRunner
                 .withPropertyValues(
@@ -125,11 +149,47 @@ class XiaozhiVoiceGatewayBeansTest {
     }
 
     @Test
+    void shouldUseTencentRealtimeSpeechToTextWhenStreamingTencentConfigured() {
+        contextRunner
+                .withPropertyValues(
+                        "chatbot.voice.asr.mode=streaming",
+                        "chatbot.voice.asr.provider=tencent",
+                        "chatbot.voice.asr.tencent.app-id=app-id",
+                        "chatbot.voice.asr.tencent.secret-id=secret-id",
+                        "chatbot.voice.asr.tencent.secret-key=secret-key"
+                )
+                .run(context -> {
+                    var client = context.getBean(StreamingSpeechToTextClient.class);
+
+                    assertThat(client).isInstanceOf(TencentRealtimeSpeechToTextClient.class);
+                });
+    }
+
+    @Test
     void shouldFailFastWhenTencentSpeechToTextSecretIsMissing() {
         contextRunner
                 .withPropertyValues("chatbot.voice.asr.provider=tencent")
                 .run(context -> assertThat(context.getStartupFailure())
                         .hasRootCauseMessage("Tencent Cloud ASR requires secret-id and secret-key"));
+    }
+
+    @Test
+    void shouldFailFastWhenTencentRealtimeSpeechToTextCredentialIsMissing() {
+        contextRunner
+                .withPropertyValues(
+                        "chatbot.voice.asr.mode=streaming",
+                        "chatbot.voice.asr.provider=tencent"
+                )
+                .run(context -> assertThat(context.getStartupFailure())
+                        .hasRootCauseMessage("Tencent realtime ASR requires app-id, secret-id and secret-key"));
+    }
+
+    @Test
+    void shouldFailFastWhenXiaozhiAsrModeIsUnsupported() {
+        contextRunner
+                .withPropertyValues("chatbot.voice.asr.mode=unsupported")
+                .run(context -> assertThat(context.getStartupFailure())
+                        .hasRootCauseMessage("Unsupported Xiaozhi ASR mode: unsupported"));
     }
 
     @Test

@@ -4,10 +4,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
+import com.jzb.chatbot.speech.FakeStreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
 import com.jzb.chatbot.speech.SpeechToTextClient;
+import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextConfig;
+import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextClient;
+import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextConfig;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechConfig;
 import com.jzb.chatbot.speech.TextToSpeechClient;
@@ -59,7 +63,13 @@ public class XiaozhiVoiceGatewayBeans {
     }
 
     @Bean
+    XiaozhiAsrMode xiaozhiAsrMode(@Value("${chatbot.voice.asr.mode:sentence}") String mode) {
+        return new XiaozhiAsrMode(mode);
+    }
+
+    @Bean
     SpeechToTextClient speechToTextClient(
+            XiaozhiAsrMode mode,
             @Value("${chatbot.voice.asr.provider:fake}") String provider,
             @Value("${chatbot.voice.asr.tencent.secret-id:}") String secretId,
             @Value("${chatbot.voice.asr.tencent.secret-key:}") String secretKey,
@@ -70,7 +80,7 @@ public class XiaozhiVoiceGatewayBeans {
             @Value("${chatbot.voice.asr.tencent.sample-rate:16000}") int sampleRate,
             @Value("${chatbot.voice.asr.tencent.timeout-seconds:15}") int timeoutSeconds
     ) {
-        if (!"tencent".equalsIgnoreCase(provider)) {
+        if (mode.streaming() || !"tencent".equalsIgnoreCase(provider)) {
             return new FakeSpeechToTextClient();
         }
         if (secretId.isBlank() || secretKey.isBlank()) {
@@ -85,6 +95,35 @@ public class XiaozhiVoiceGatewayBeans {
                 voiceFormat,
                 sampleRate,
                 Duration.ofSeconds(timeoutSeconds)
+        ));
+    }
+
+    @Bean
+    StreamingSpeechToTextClient streamingSpeechToTextClient(
+            XiaozhiAsrMode mode,
+            @Value("${chatbot.voice.asr.provider:fake}") String provider,
+            @Value("${chatbot.voice.asr.tencent.app-id:}") String appId,
+            @Value("${chatbot.voice.asr.tencent.secret-id:}") String secretId,
+            @Value("${chatbot.voice.asr.tencent.secret-key:}") String secretKey,
+            @Value("${chatbot.voice.asr.tencent.engine-model-type:16k_zh}") String engineModelType,
+            @Value("${chatbot.voice.asr.tencent.sample-rate:16000}") int sampleRate,
+            @Value("${chatbot.voice.asr.tencent.chunk-timeout-millis:100}") long chunkTimeoutMillis,
+            @Value("${chatbot.voice.asr.tencent.recognition-timeout-seconds:90}") long recognitionTimeoutSeconds
+    ) {
+        if (!mode.streaming() || !"tencent".equalsIgnoreCase(provider)) {
+            return new FakeStreamingSpeechToTextClient();
+        }
+        if (appId.isBlank() || secretId.isBlank() || secretKey.isBlank()) {
+            throw new IllegalStateException("Tencent realtime ASR requires app-id, secret-id and secret-key");
+        }
+        return new TencentRealtimeSpeechToTextClient(new TencentRealtimeSpeechToTextConfig(
+                appId,
+                secretId,
+                secretKey,
+                engineModelType,
+                sampleRate,
+                Duration.ofMillis(chunkTimeoutMillis),
+                Duration.ofSeconds(recognitionTimeoutSeconds)
         ));
     }
 

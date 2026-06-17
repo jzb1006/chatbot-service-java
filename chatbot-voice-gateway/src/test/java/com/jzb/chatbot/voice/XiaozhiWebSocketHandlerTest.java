@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.hermes.FakeHermesClient;
 import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
+import com.jzb.chatbot.speech.FakeStreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
@@ -230,7 +231,10 @@ class XiaozhiWebSocketHandlerTest {
                 new XiaozhiServerEventFactory(new ObjectMapper()),
                 new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
                 new XiaozhiVoiceTokenAuth(expectedToken),
-                new XiaozhiMcpBridge(new XiaozhiServerEventFactory(new ObjectMapper()))
+                new XiaozhiMcpBridge(new XiaozhiServerEventFactory(new ObjectMapper())),
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient(),
+                XiaozhiAudioParams.defaults()
         );
     }
 }

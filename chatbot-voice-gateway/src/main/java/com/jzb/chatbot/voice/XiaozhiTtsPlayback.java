@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -45,14 +46,16 @@ class XiaozhiTtsPlayback {
         this.eventFactory = eventFactory;
     }
 
-    public boolean playSentence(String sentence, List<ByteBuffer> frames) throws IOException {
+    public boolean playSentence(String sentence, List<ByteBuffer> frames, BooleanSupplier activeSupplier) throws IOException {
         if (cancelled.get()) {
             return false;
         }
         if (frames == null || frames.isEmpty()) {
             return true;
         }
-        sendText(eventFactory.ttsSentenceStart(voiceSession.sessionId(), sentence));
+        if (!sendText(eventFactory.ttsSentenceStart(voiceSession.sessionId(), sentence), activeSupplier)) {
+            return false;
+        }
         for (var frame : frames) {
             if (cancelled.get()) {
                 return false;
@@ -61,9 +64,9 @@ class XiaozhiTtsPlayback {
             if (cancelled.get()) {
                 return false;
             }
-            webSocketSession.sendMessage(new BinaryMessage(
-                    codec.encodeAudioFrame(voiceSession.protocolVersion(), 0, frame)
-            ));
+            if (!sendBinary(frame, activeSupplier)) {
+                return false;
+            }
             sentFrames++;
             playPosition += OPUS_FRAME_SEND_INTERVAL_NS;
         }
@@ -102,7 +105,23 @@ class XiaozhiTtsPlayback {
         }
     }
 
-    private void sendText(String payload) throws IOException {
+    private boolean sendText(String payload, BooleanSupplier activeSupplier) throws IOException {
+        if (!activeSupplier.getAsBoolean() || !voiceSession.hasPlayback(this)) {
+            cancel();
+            return false;
+        }
         webSocketSession.sendMessage(new TextMessage(payload));
+        return activeSupplier.getAsBoolean() && voiceSession.hasPlayback(this);
+    }
+
+    private boolean sendBinary(ByteBuffer frame, BooleanSupplier activeSupplier) throws IOException {
+        if (!activeSupplier.getAsBoolean() || !voiceSession.hasPlayback(this)) {
+            cancel();
+            return false;
+        }
+        webSocketSession.sendMessage(new BinaryMessage(
+                codec.encodeAudioFrame(voiceSession.protocolVersion(), 0, frame)
+        ));
+        return activeSupplier.getAsBoolean() && voiceSession.hasPlayback(this);
     }
 }

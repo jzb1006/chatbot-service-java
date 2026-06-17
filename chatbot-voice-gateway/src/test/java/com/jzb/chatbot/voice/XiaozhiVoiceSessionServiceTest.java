@@ -13,8 +13,12 @@ import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.hermes.HermesRequest;
 import com.jzb.chatbot.hermes.HermesResponse;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
+import com.jzb.chatbot.speech.FakeStreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
+import com.jzb.chatbot.speech.SpeechToTextAudioStream;
 import com.jzb.chatbot.speech.SpeechToTextClient;
+import com.jzb.chatbot.speech.SpeechToTextResult;
+import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
@@ -23,13 +27,20 @@ import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
 import com.jzb.chatbot.voice.reminder.XiaozhiReminderRequestedEvent;
+import io.github.jaredmdobson.concentus.OpusApplication;
+import io.github.jaredmdobson.concentus.OpusEncoder;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -42,16 +53,7 @@ import org.springframework.web.socket.TextMessage;
 class XiaozhiVoiceSessionServiceTest {
 
     private final XiaozhiMessageCodec codec = new XiaozhiMessageCodec(new ObjectMapper());
-    private final XiaozhiVoiceSessionService service = new XiaozhiVoiceSessionService(
-            codec,
-            new FakeSpeechToTextClient(),
-            new FakeHermesClient(),
-            new FakeTextToSpeechClient(),
-            new XiaozhiServerEventFactory(new ObjectMapper()),
-            new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-            new XiaozhiVoiceTokenAuth(""),
-            newMcpBridge()
-    );
+    private final XiaozhiVoiceSessionService service = newService(new FakeTextToSpeechClient());
 
     @Test
     void shouldStoreFirmwareHandshakeParametersWhenSessionOpened() {
@@ -130,6 +132,395 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldWritePcmChunksToStreamingAsrBeforeListenStop() {
+        var streamingSpeech = new CapturingStreamingSpeechToTextClient();
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithStreamingAsr.handleBinary(session, ByteBuffer.wrap(encodeOpusFrame()));
+
+        assertThat(streamingSpeech.awaitChunkCountAtLeast(1)).isTrue();
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(streamingSpeech.chunkCount()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void shouldKeepSentencePathWhenAsrModeIsSentence() {
+        var sentenceSpeech = new RecordingSpeechToTextClient();
+        var streamingSpeech = new CapturingStreamingSpeechToTextClient();
+        var serviceWithSentenceAsr = newService(
+                sentenceSpeech,
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("sentence"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithSentenceAsr);
+
+        serviceWithSentenceAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithSentenceAsr.handleBinary(session, ByteBuffer.wrap(new byte[] {1, 2, 3}));
+        serviceWithSentenceAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(sentenceSpeech.callCount()).isEqualTo(1);
+        assertThat(streamingSpeech.chunkCount()).isZero();
+        assertThat(serviceWithSentenceAsr.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
+    @Test
+    void shouldUseStreamingPathWhenAsrModeIsStreaming() {
+        var sentenceSpeech = new RecordingSpeechToTextClient();
+        var streamingSpeech = new CapturingStreamingSpeechToTextClient();
+        var serviceWithStreamingAsr = newService(
+                sentenceSpeech,
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithStreamingAsr.handleBinary(session, ByteBuffer.wrap(encodeOpusFrame()));
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(sentenceSpeech.callCount()).isZero();
+        assertThat(streamingSpeech.chunkCount()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void shouldReturnIdleWhenStreamingWorkerFinishesBeforeListenStop() throws Exception {
+        var streamingSpeech = new TimeoutStreamingSpeechToTextClient();
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        assertThat(streamingSpeech.awaitFinished()).isTrue();
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(serviceWithStreamingAsr.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
+    @Test
+    void shouldCompleteStreamingAsrWhenSessionCloses() throws Exception {
+        var streamingSpeech = new EndAwareStreamingSpeechToTextClient();
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        assertThat(streamingSpeech.awaitStarted()).isTrue();
+        serviceWithStreamingAsr.close(session);
+
+        assertThat(streamingSpeech.awaitEnd()).isTrue();
+    }
+
+    @Test
+    void shouldNotLetPreviousStreamingTurnClearCurrentStream() {
+        var streamingSpeech = new TimeoutStreamingSpeechToTextClient();
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithStreamingAsr.handleBinary(session, ByteBuffer.wrap(encodeOpusFrame()));
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(streamingSpeech.chunkCount()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void shouldIgnorePreviousStreamingTurnFailureAfterReplacement() throws Exception {
+        var streamingSpeech = new ReplacedTurnFailingStreamingSpeechToTextClient();
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        assertThat(streamingSpeech.awaitFirstCallStarted()).isTrue();
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        assertThat(streamingSpeech.awaitSecondCallStarted()).isTrue();
+        assertThat(streamingSpeech.awaitOldTurnReadyToFail()).isTrue();
+        streamingSpeech.releaseOldFailure();
+
+        awaitCondition(
+                () -> serviceWithStreamingAsr.getSession(session.getId()).state() != XiaozhiVoiceSession.State.LISTENING
+                        || hasTextMessageContaining(session, "\"code\":\"asr_failed\""),
+                Duration.ofMillis(200)
+        );
+
+        assertThat(hasTextMessageContaining(session, "\"code\":\"asr_failed\"")).isFalse();
+        assertThat(serviceWithStreamingAsr.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.LISTENING);
+
+        serviceWithStreamingAsr.handleBinary(session, ByteBuffer.wrap(encodeOpusFrame()));
+        assertThat(streamingSpeech.awaitSecondChunkCountAtLeast(1)).isTrue();
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+    }
+
+    @Test
+    void shouldNotLetPreviousStreamingTurnFinishPlaybackAfterNewListenStart() throws Exception {
+        var ttsClient = new BlockingTextToSpeechClient();
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new StreamingHermesClient("旧回合回答。"),
+                ttsClient,
+                new XiaozhiAsrMode("streaming"),
+                new EndAwareStreamingSpeechToTextClient()
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+        assertThat(ttsClient.awaitFirstCall()).isTrue();
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        ttsClient.releaseFirstCall();
+
+        assertThat(awaitCondition(
+                () -> serviceWithStreamingAsr.getSession(session.getId()).state() == XiaozhiVoiceSession.State.IDLE,
+                Duration.ofMillis(200)
+        )).isFalse();
+        assertThat(serviceWithStreamingAsr.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.LISTENING);
+    }
+
+    @Test
+    void shouldCancelPreviousStreamingPlaybackWhenNewListenStartArrives() throws Exception {
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new StreamingHermesClient("旧回合回答。"),
+                new MultiFrameTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                new EndAwareStreamingSpeechToTextClient()
+        );
+        var session = new BinarySendBlockingSession("ws-session-1");
+        serviceWithStreamingAsr.open(session);
+        serviceWithStreamingAsr.handleHello(session, new XiaozhiClientHello(
+                "hello",
+                1,
+                Map.of("mcp", true),
+                "websocket",
+                XiaozhiAudioParams.defaults()
+        ));
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+        assertThat(session.awaitFirstBinarySend()).isTrue();
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        session.releaseFirstBinarySend();
+
+        assertThat(awaitCondition(
+                () -> session.binaryMessageCount() >= 2,
+                Duration.ofMillis(200)
+        )).isFalse();
+        assertThat(serviceWithStreamingAsr.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.LISTENING);
+    }
+
+    @Test
+    void shouldNotLetPreviousStreamingTurnContinuePlaybackAfterReplacement() throws Exception {
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new StreamingHermesClient("旧回合回答。"),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                new EndAwareStreamingSpeechToTextClient()
+        );
+        var session = new TextSendBlockingSession("ws-session-1", "\"type\":\"llm\"");
+        serviceWithStreamingAsr.open(session);
+        serviceWithStreamingAsr.handleHello(session, new XiaozhiClientHello(
+                "hello",
+                1,
+                Map.of("mcp", true),
+                "websocket",
+                XiaozhiAudioParams.defaults()
+        ));
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+        assertThat(session.awaitBlockedTextSend()).isTrue();
+
+        var replacementThread = Thread.startVirtualThread(() -> serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        )));
+        session.releaseTextSend();
+        join(replacementThread);
+
+        assertThat(awaitCondition(
+                () -> hasTextMessageContaining(session, "\"type\":\"tts\""),
+                Duration.ofMillis(200)
+        )).isFalse();
+        assertThat(serviceWithStreamingAsr.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.LISTENING);
+    }
+
+    @Test
+    void shouldNotSendPreviousStreamingSttWhenTurnIsReplacedBeforeSend() throws Exception {
+        var eventFactory = new SttBlockingEventFactory();
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                new EndAwareStreamingSpeechToTextClient(),
+                eventFactory
+        );
+        var session = new SttSendCountingSession("ws-session-1");
+        serviceWithStreamingAsr.open(session);
+        serviceWithStreamingAsr.handleHello(session, new XiaozhiClientHello(
+                "hello",
+                1,
+                Map.of("mcp", true),
+                "websocket",
+                XiaozhiAudioParams.defaults()
+        ));
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+        assertThat(eventFactory.awaitSttPayloadRequested()).isTrue();
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        eventFactory.releaseSttPayload();
+
+        awaitCondition(() -> session.sttSendCount() > 0, Duration.ofMillis(200));
+
+        assertThat(session.sttSendCount()).isZero();
+        assertThat(serviceWithStreamingAsr.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.LISTENING);
+    }
+
+    @Test
+    void shouldKeepStreamingTurnConversationWhenSessionNewArrivesBeforeHermesCall() throws Exception {
+        var hermesClient = new RecordingHermesClient();
+        var streamingSpeech = new ReleaseAfterEndStreamingSpeechToTextClient();
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                hermesClient,
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = new SttSendBlockingSession("ws-session-1");
+        serviceWithStreamingAsr.open(session);
+        serviceWithStreamingAsr.handleHello(session, new XiaozhiClientHello(
+                "hello",
+                1,
+                Map.of("mcp", true),
+                "websocket",
+                XiaozhiAudioParams.defaults()
+        ));
+        var originalConversationId = serviceWithStreamingAsr.getSession(session.getId()).conversationId();
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+        assertThat(streamingSpeech.awaitEnd()).isTrue();
+        streamingSpeech.releaseResult();
+        assertThat(session.awaitSttSend()).isTrue();
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "session", "new", null, null, null, "ws-session-1", null
+        ));
+        var newConversationId = serviceWithStreamingAsr.getSession(session.getId()).conversationId();
+        session.releaseSttSend();
+
+        awaitCondition(() -> serviceWithStreamingAsr.getSession(session.getId()).state() == XiaozhiVoiceSession.State.IDLE,
+                Duration.ofMillis(200));
+        assertThat(hermesClient.conversationIds()).doesNotContain(newConversationId);
+        if (!hermesClient.conversationIds().isEmpty()) {
+            assertThat(hermesClient.conversationIds()).containsExactly(originalConversationId);
+        }
+    }
+
+    @Test
     void shouldSendSttHermesAndTtsEventsWhenListenStops() {
         var session = openSession();
         service.handleText(session, new XiaozhiClientMessage(
@@ -178,6 +569,8 @@ class XiaozhiVoiceSessionServiceTest {
                                     "sessionId=ws-session-1",
                                     "deviceId=ws-session-1",
                                     "conversationId=conv-ws-session-1",
+                                    "asrProvider=sentence",
+                                    "asrMillis=",
                                     "userText=ping",
                                     "assistantText=pong"
                             ));
@@ -212,15 +605,12 @@ class XiaozhiVoiceSessionServiceTest {
     @Test
     void shouldSynthesizeEachStreamedSentenceSeparately() {
         var ttsClient = new RecordingTextToSpeechClient();
-        var serviceWithStreamingHermes = new XiaozhiVoiceSessionService(
-                codec,
+        var serviceWithStreamingHermes = newService(
                 new FakeSpeechToTextClient(),
                 new StreamingHermesClient("第一句内容很完整。", "第二句内容也完整。"),
                 ttsClient,
-                new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth(""),
-                newMcpBridge()
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
         );
         var session = openSession(serviceWithStreamingHermes);
 
@@ -237,15 +627,12 @@ class XiaozhiVoiceSessionServiceTest {
     @Test
     void shouldCancelQueuedStreamingTtsWhenAbortReceived() {
         var ttsClient = new BlockingTextToSpeechClient();
-        var serviceWithStreamingHermes = new XiaozhiVoiceSessionService(
-                codec,
+        var serviceWithStreamingHermes = newService(
                 new FakeSpeechToTextClient(),
                 new StreamingHermesClient("第一句内容很完整。", "第二句内容也完整。"),
                 ttsClient,
-                new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth(""),
-                newMcpBridge()
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
         );
         var session = openSession(serviceWithStreamingHermes);
         var turnThread = Thread.startVirtualThread(() -> runSingleTurn(serviceWithStreamingHermes, session));
@@ -270,15 +657,12 @@ class XiaozhiVoiceSessionServiceTest {
     @Test
     void shouldUseFirmwareDeviceIdWhenCallingHermes() {
         var hermesClient = new CapturingHermesClient();
-        var serviceWithCapturingHermes = new XiaozhiVoiceSessionService(
-                codec,
+        var serviceWithCapturingHermes = newService(
                 new FakeSpeechToTextClient(),
                 hermesClient,
                 new FakeTextToSpeechClient(),
-                new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth(""),
-                newMcpBridge()
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
         );
         var headers = new HttpHeaders();
         headers.set("Device-Id", "aa:bb:cc:dd:ee:ff");
@@ -311,15 +695,12 @@ class XiaozhiVoiceSessionServiceTest {
     @Test
     void shouldKeepSameConversationUntilSessionNewRequested() {
         var hermesClient = new RecordingHermesClient();
-        var serviceWithRecordingHermes = new XiaozhiVoiceSessionService(
-                codec,
+        var serviceWithRecordingHermes = newService(
                 new FakeSpeechToTextClient(),
                 hermesClient,
                 new FakeTextToSpeechClient(),
-                new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth(""),
-                newMcpBridge()
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
         );
         var session = openSession(serviceWithRecordingHermes);
 
@@ -344,15 +725,12 @@ class XiaozhiVoiceSessionServiceTest {
     @Test
     void shouldSkipHermesAndReturnIdleWhenAsrTextIsBlank() {
         var hermesClient = new CapturingHermesClient();
-        var serviceWithBlankAsr = new XiaozhiVoiceSessionService(
-                codec,
+        var serviceWithBlankAsr = newService(
                 audioFrames -> " ",
                 hermesClient,
                 new FakeTextToSpeechClient(),
-                new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth(""),
-                newMcpBridge()
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
         );
         var session = openSession(serviceWithBlankAsr);
 
@@ -374,15 +752,12 @@ class XiaozhiVoiceSessionServiceTest {
 
     @Test
     void shouldReturnIdleWhenHermesFails() {
-        var serviceWithFailingHermes = new XiaozhiVoiceSessionService(
-                codec,
+        var serviceWithFailingHermes = newService(
                 new FakeSpeechToTextClient(),
                 new FailingHermesClient(),
                 new FakeTextToSpeechClient(),
-                new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth(""),
-                newMcpBridge()
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
         );
         var session = openSession(serviceWithFailingHermes);
         serviceWithFailingHermes.handleText(session, new XiaozhiClientMessage(
@@ -403,16 +778,44 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldNotLetPreviousHermesFailureOverwriteNewListenStart() throws Exception {
+        var serviceWithFailingHermes = newService(
+                new FakeSpeechToTextClient(),
+                new FailingHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
+        );
+        var session = new TtsStopBlockingSession("ws-session-1");
+        serviceWithFailingHermes.open(session);
+        serviceWithFailingHermes.handleHello(session, new XiaozhiClientHello(
+                "hello",
+                1,
+                Map.of("mcp", true),
+                "websocket",
+                XiaozhiAudioParams.defaults()
+        ));
+        var turnThread = Thread.startVirtualThread(() -> runSingleTurn(serviceWithFailingHermes, session));
+        assertThat(session.awaitTtsStopSend()).isTrue();
+
+        serviceWithFailingHermes.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        session.releaseTtsStopSend();
+        join(turnThread);
+
+        assertThat(hasTextMessageContaining(session, "\"code\":\"hermes_failed\"")).isFalse();
+        assertThat(serviceWithFailingHermes.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.LISTENING);
+    }
+
+    @Test
     void shouldSendTtsStopWhenSynthesizedAudioIsEmpty() {
-        var serviceWithEmptyTts = new XiaozhiVoiceSessionService(
-                codec,
+        var serviceWithEmptyTts = newService(
                 new FakeSpeechToTextClient(),
                 new FakeHermesClient(),
                 new EmptyTextToSpeechClient(),
-                new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth(""),
-                newMcpBridge()
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
         );
         var session = openSession(serviceWithEmptyTts);
         serviceWithEmptyTts.handleText(session, new XiaozhiClientMessage(
@@ -434,15 +837,12 @@ class XiaozhiVoiceSessionServiceTest {
 
     @Test
     void shouldSendTtsStopWhenTextToSpeechFailsAfterTtsStart() {
-        var serviceWithFailingTts = new XiaozhiVoiceSessionService(
-                codec,
+        var serviceWithFailingTts = newService(
                 new FakeSpeechToTextClient(),
                 new FakeHermesClient(),
                 new FailingTextToSpeechClient(),
-                new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth(""),
-                newMcpBridge()
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
         );
         var session = openSession(serviceWithFailingTts);
         serviceWithFailingTts.handleText(session, new XiaozhiClientMessage(
@@ -494,15 +894,12 @@ class XiaozhiVoiceSessionServiceTest {
     @Test
     void shouldIgnoreBinaryFrameOutsideListeningState() {
         var recordingSpeech = new RecordingSpeechToTextClient();
-        var serviceWithRecordingSpeech = new XiaozhiVoiceSessionService(
-                codec,
+        var serviceWithRecordingSpeech = newService(
                 recordingSpeech,
                 new FakeHermesClient(),
                 new FakeTextToSpeechClient(),
-                new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth(""),
-                newMcpBridge()
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
         );
         var session = openSession(serviceWithRecordingSpeech);
 
@@ -523,14 +920,12 @@ class XiaozhiVoiceSessionServiceTest {
     @Test
     void shouldBridgeMcpInboundResponse() throws Exception {
         var mcpBridge = newMcpBridge();
-        var serviceWithBridge = new XiaozhiVoiceSessionService(
-                codec,
+        var serviceWithBridge = newService(
                 new FakeSpeechToTextClient(),
                 new FakeHermesClient(),
                 new FakeTextToSpeechClient(),
-                new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth(""),
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient(),
                 mcpBridge
         );
         var headers = new HttpHeaders();
@@ -610,22 +1005,78 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
-    void shouldScheduleRelativeReminderBeforeCallingHermes() {
+    void shouldNotLetPreviousNotificationTtsFailureOverwriteNewListenStart() throws Exception {
+        var serviceWithFailingTts = newService(new FailingTextToSpeechClient());
+        var session = new TtsStopBlockingSession("ws-session-1");
+        serviceWithFailingTts.open(session);
+        serviceWithFailingTts.handleHello(session, new XiaozhiClientHello(
+                "hello",
+                1,
+                Map.of("mcp", true),
+                "websocket",
+                XiaozhiAudioParams.defaults()
+        ));
+        var notifyThread = Thread.startVirtualThread(() -> serviceWithFailingTts.notifyDevice("ws-session-1", "提醒时间到了"));
+        assertThat(session.awaitTtsStopSend()).isTrue();
+
+        serviceWithFailingTts.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+        session.releaseTtsStopSend();
+        join(notifyThread);
+
+        assertThat(hasTextMessageContaining(session, "\"code\":\"tts_failed\"")).isFalse();
+        assertThat(serviceWithFailingTts.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.LISTENING);
+    }
+
+    @Test
+    void shouldNotCreateReminderFromLocalTextParsingWhenHermesDoesNotReturnAction() {
         var eventPublisher = new RecordingApplicationEventPublisher();
-        var serviceWithReminderIntent = new XiaozhiVoiceSessionService(
-                codec,
+        var serviceWithReminderIntent = newService(
                 new FixedSpeechToTextClient("一分钟后提醒我喝水"),
-                new FailingHermesClient(),
+                new StreamingHermesClient("好的，我记下了。"),
                 new FakeTextToSpeechClient(),
-                new XiaozhiServerEventFactory(new ObjectMapper()),
-                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
-                new XiaozhiVoiceTokenAuth(""),
-                newMcpBridge()
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
         );
         serviceWithReminderIntent.setApplicationEventPublisher(eventPublisher);
         var session = openSession(serviceWithReminderIntent);
 
         runSingleTurn(serviceWithReminderIntent, session);
+
+        assertThat(eventPublisher.events()).isEmpty();
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload)
+                        .contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "好的，我记下了。"));
+    }
+
+    @Test
+    void shouldCreateReminderOnlyFromHermesAgentEvent() {
+        var eventPublisher = new RecordingApplicationEventPublisher();
+        var serviceWithReminderEvent = newService(
+                new FixedSpeechToTextClient("帮我记一下喝水"),
+                new RawStreamingHermesClient(
+                        """
+                                event: xiaozhi.agent_event
+                                data: {"action":"create_reminder","message":"喝水","delay_seconds":60,"confirmation_text":"1分钟后提醒你喝水"}
+
+                                """,
+                        """
+                                event: response.output_text.delta
+                                data: {"delta":"1分钟后提醒你喝水。"}
+
+                                """
+                ),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
+        );
+        serviceWithReminderEvent.setApplicationEventPublisher(eventPublisher);
+        var session = openSession(serviceWithReminderEvent);
+
+        runSingleTurn(serviceWithReminderEvent, session);
 
         assertThat(eventPublisher.events())
                 .singleElement()
@@ -638,7 +1089,39 @@ class XiaozhiVoiceSessionServiceTest {
                 .filteredOn(TextMessage.class::isInstance)
                 .extracting(message -> message.getPayload().toString())
                 .anySatisfy(payload -> assertThat(payload)
-                        .contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "一分钟后提醒你喝水"));
+                        .contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "1分钟后提醒你喝水。"));
+    }
+
+    @Test
+    void shouldSpeakReminderConfirmationFromCurrentHermesPlaybackWhenEventHasNoTextDelta() {
+        var eventPublisher = new RecordingApplicationEventPublisher();
+        var serviceWithReminderEvent = newService(
+                new FixedSpeechToTextClient("帮我记一下喝水"),
+                new RawStreamingHermesClient("""
+                        event: xiaozhi.agent_event
+                        data: {"action":"create_reminder","message":"喝水","delay_seconds":60,"confirmation_text":"1分钟后提醒你喝水"}
+
+                        """),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
+        );
+        serviceWithReminderEvent.setApplicationEventPublisher(eventPublisher);
+        var session = openSession(serviceWithReminderEvent);
+
+        runSingleTurn(serviceWithReminderEvent, session);
+
+        assertThat(eventPublisher.events())
+                .singleElement()
+                .isInstanceOf(XiaozhiReminderRequestedEvent.class);
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .filteredOn(payload -> payload.contains("\"type\":\"tts\""))
+                .anySatisfy(payload -> assertThat(payload)
+                        .contains("\"state\":\"sentence_start\"", "1分钟后提醒你喝水"))
+                .anySatisfy(payload -> assertThat(payload).contains("\"state\":\"stop\""));
+        assertThat(serviceWithReminderEvent.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
     }
 
     private TestWebSocketSession openSession() {
@@ -646,15 +1129,68 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     private XiaozhiVoiceSessionService newService(TextToSpeechClient textToSpeechClient) {
-        return new XiaozhiVoiceSessionService(
-                codec,
+        return newService(
                 new FakeSpeechToTextClient(),
                 new FakeHermesClient(),
+                textToSpeechClient,
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient()
+        );
+    }
+
+    private XiaozhiVoiceSessionService newService(
+            SpeechToTextClient speechToTextClient,
+            HermesClient hermesClient,
+            TextToSpeechClient textToSpeechClient,
+            XiaozhiAsrMode asrMode,
+            StreamingSpeechToTextClient streamingSpeechToTextClient
+    ) {
+        return newService(speechToTextClient, hermesClient, textToSpeechClient, asrMode, streamingSpeechToTextClient, newMcpBridge());
+    }
+
+    private XiaozhiVoiceSessionService newService(
+            SpeechToTextClient speechToTextClient,
+            HermesClient hermesClient,
+            TextToSpeechClient textToSpeechClient,
+            XiaozhiAsrMode asrMode,
+            StreamingSpeechToTextClient streamingSpeechToTextClient,
+            XiaozhiMcpBridge mcpBridge
+    ) {
+        return new XiaozhiVoiceSessionService(
+                codec,
+                speechToTextClient,
+                hermesClient,
                 textToSpeechClient,
                 new XiaozhiServerEventFactory(new ObjectMapper()),
                 new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
                 new XiaozhiVoiceTokenAuth(""),
-                newMcpBridge()
+                mcpBridge,
+                asrMode,
+                streamingSpeechToTextClient,
+                XiaozhiAudioParams.defaults()
+        );
+    }
+
+    private XiaozhiVoiceSessionService newService(
+            SpeechToTextClient speechToTextClient,
+            HermesClient hermesClient,
+            TextToSpeechClient textToSpeechClient,
+            XiaozhiAsrMode asrMode,
+            StreamingSpeechToTextClient streamingSpeechToTextClient,
+            XiaozhiServerEventFactory eventFactory
+    ) {
+        return new XiaozhiVoiceSessionService(
+                codec,
+                speechToTextClient,
+                hermesClient,
+                textToSpeechClient,
+                eventFactory,
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth(""),
+                new XiaozhiMcpBridge(eventFactory),
+                asrMode,
+                streamingSpeechToTextClient,
+                XiaozhiAudioParams.defaults()
         );
     }
 
@@ -721,7 +1257,7 @@ class XiaozhiVoiceSessionServiceTest {
 
     private static class RecordingHermesClient implements HermesClient {
 
-        private final java.util.ArrayList<String> conversationIds = new java.util.ArrayList<>();
+        private final java.util.List<String> conversationIds = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         @Override
         public HermesResponse chat(HermesRequest request, HermesClientConfig config) {
@@ -773,6 +1309,25 @@ class XiaozhiVoiceSessionServiceTest {
         }
     }
 
+    private static class RawStreamingHermesClient implements HermesClient {
+
+        private final List<String> chunks;
+
+        private RawStreamingHermesClient(String... chunks) {
+            this.chunks = List.of(chunks);
+        }
+
+        @Override
+        public HermesResponse chat(HermesRequest request, HermesClientConfig config) {
+            return new HermesResponse(request.conversationId(), String.join("", chunks));
+        }
+
+        @Override
+        public Stream<String> streamChat(HermesRequest request, HermesClientConfig config) {
+            return chunks.stream();
+        }
+    }
+
     private static class RecordingTextToSpeechClient implements TextToSpeechClient {
 
         private final java.util.ArrayList<String> texts = new java.util.ArrayList<>();
@@ -819,6 +1374,17 @@ class XiaozhiVoiceSessionServiceTest {
 
         private List<String> texts() {
             return List.copyOf(texts);
+        }
+    }
+
+    private static class MultiFrameTextToSpeechClient implements TextToSpeechClient {
+
+        @Override
+        public List<ByteBuffer> synthesize(String text, VoiceId voiceId) {
+            return List.of(
+                    ByteBuffer.wrap(new byte[] {1}),
+                    ByteBuffer.wrap(new byte[] {2})
+            );
         }
     }
 
@@ -875,16 +1441,166 @@ class XiaozhiVoiceSessionServiceTest {
         }
     }
 
+    private static class BinarySendBlockingSession extends TestWebSocketSession {
+
+        private final CountDownLatch firstBinarySendStarted = new CountDownLatch(1);
+        private final CountDownLatch releaseFirstBinarySend = new CountDownLatch(1);
+        private final AtomicInteger binaryMessageCount = new AtomicInteger();
+
+        BinarySendBlockingSession(String id) {
+            super(id);
+        }
+
+        @Override
+        public void sendMessage(WebSocketMessage<?> message) throws IOException {
+            if (message instanceof BinaryMessage) {
+                var currentCount = binaryMessageCount.incrementAndGet();
+                if (currentCount == 1) {
+                    firstBinarySendStarted.countDown();
+                    await(releaseFirstBinarySend);
+                }
+            }
+            super.sendMessage(message);
+        }
+
+        private boolean awaitFirstBinarySend() throws InterruptedException {
+            return firstBinarySendStarted.await(1, TimeUnit.SECONDS);
+        }
+
+        private void releaseFirstBinarySend() {
+            releaseFirstBinarySend.countDown();
+        }
+
+        private int binaryMessageCount() {
+            return binaryMessageCount.get();
+        }
+    }
+
+    private static class TextSendBlockingSession extends TestWebSocketSession {
+
+        private final String blockedPayloadPart;
+        private final CountDownLatch blockedTextSendStarted = new CountDownLatch(1);
+        private final CountDownLatch releaseTextSend = new CountDownLatch(1);
+
+        TextSendBlockingSession(String id, String blockedPayloadPart) {
+            super(id);
+            this.blockedPayloadPart = blockedPayloadPart;
+        }
+
+        @Override
+        public void sendMessage(WebSocketMessage<?> message) throws IOException {
+            if (message instanceof TextMessage textMessage
+                    && textMessage.getPayload().contains(blockedPayloadPart)) {
+                blockedTextSendStarted.countDown();
+                await(releaseTextSend);
+            }
+            super.sendMessage(message);
+        }
+
+        private boolean awaitBlockedTextSend() throws InterruptedException {
+            return blockedTextSendStarted.await(1, TimeUnit.SECONDS);
+        }
+
+        private void releaseTextSend() {
+            releaseTextSend.countDown();
+        }
+    }
+
+    private static class SttSendBlockingSession extends TestWebSocketSession {
+
+        private final CountDownLatch sttSendStarted = new CountDownLatch(1);
+        private final CountDownLatch releaseSttSend = new CountDownLatch(1);
+
+        SttSendBlockingSession(String id) {
+            super(id);
+        }
+
+        @Override
+        public void sendMessage(WebSocketMessage<?> message) throws IOException {
+            if (message instanceof TextMessage textMessage
+                    && textMessage.getPayload().contains("\"type\":\"stt\"")) {
+                sttSendStarted.countDown();
+                await(releaseSttSend);
+            }
+            super.sendMessage(message);
+        }
+
+        private boolean awaitSttSend() throws InterruptedException {
+            return sttSendStarted.await(1, TimeUnit.SECONDS);
+        }
+
+        private void releaseSttSend() {
+            releaseSttSend.countDown();
+        }
+    }
+
+    private static class SttSendCountingSession extends TestWebSocketSession {
+
+        private final AtomicInteger sttSendCount = new AtomicInteger();
+
+        SttSendCountingSession(String id) {
+            super(id);
+        }
+
+        @Override
+        public void sendMessage(WebSocketMessage<?> message) throws IOException {
+            if (message instanceof TextMessage textMessage
+                    && textMessage.getPayload().contains("\"type\":\"stt\"")) {
+                sttSendCount.incrementAndGet();
+            }
+            super.sendMessage(message);
+        }
+
+        private int sttSendCount() {
+            return sttSendCount.get();
+        }
+    }
+
+    private static class TtsStopBlockingSession extends TestWebSocketSession {
+
+        private final CountDownLatch ttsStopSendStarted = new CountDownLatch(1);
+        private final CountDownLatch releaseTtsStopSend = new CountDownLatch(1);
+
+        TtsStopBlockingSession(String id) {
+            super(id);
+        }
+
+        @Override
+        public void sendMessage(WebSocketMessage<?> message) throws IOException {
+            if (message instanceof TextMessage textMessage
+                    && textMessage.getPayload().contains("\"type\":\"tts\"")
+                    && textMessage.getPayload().contains("\"state\":\"stop\"")) {
+                ttsStopSendStarted.countDown();
+                await(releaseTtsStopSend);
+            }
+            super.sendMessage(message);
+        }
+
+        private boolean awaitTtsStopSend() throws InterruptedException {
+            return ttsStopSendStarted.await(1, TimeUnit.SECONDS);
+        }
+
+        private void releaseTtsStopSend() {
+            releaseTtsStopSend.countDown();
+        }
+    }
+
     private static class RecordingSpeechToTextClient implements SpeechToTextClient {
 
         private List<List<Integer>> audioFramePayloads = List.of();
+        private int callCount;
 
         @Override
         public String transcribe(List<ByteBuffer> audioFrames) {
+            callCount++;
             audioFramePayloads = audioFrames.stream()
                     .map(RecordingSpeechToTextClient::toUnsignedBytes)
                     .toList();
             return "ping";
+        }
+
+        private int callCount() {
+            return callCount;
         }
 
         private List<List<Integer>> audioFramePayloads() {
@@ -899,6 +1615,282 @@ class XiaozhiVoiceSessionServiceTest {
             }
             return List.copyOf(values);
         }
+    }
+
+    private static class CapturingStreamingSpeechToTextClient implements StreamingSpeechToTextClient {
+
+        private final AtomicInteger chunkCount = new AtomicInteger();
+
+        @Override
+        public SpeechToTextResult transcribe(SpeechToTextAudioStream audioStream) {
+            while (true) {
+                var chunk = audioStream.take(Duration.ofMillis(100));
+                if (audioStream.isEnd(chunk)) {
+                    return new SpeechToTextResult("ping", "test", 0);
+                }
+                if (chunk.length > 0) {
+                    chunkCount.incrementAndGet();
+                }
+            }
+        }
+
+        private int chunkCount() {
+            return chunkCount.get();
+        }
+
+        private boolean awaitChunkCountAtLeast(int expected) {
+            var deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+            while (System.nanoTime() < deadline) {
+                if (chunkCount.get() >= expected) {
+                    return true;
+                }
+                Thread.onSpinWait();
+            }
+            return chunkCount.get() >= expected;
+        }
+    }
+
+    private static class TimeoutStreamingSpeechToTextClient implements StreamingSpeechToTextClient {
+
+        private final AtomicInteger chunkCount = new AtomicInteger();
+        private final CountDownLatch firstCallFinished = new CountDownLatch(1);
+        private final AtomicInteger callCount = new AtomicInteger();
+
+        @Override
+        public SpeechToTextResult transcribe(SpeechToTextAudioStream audioStream) {
+            var currentCall = callCount.incrementAndGet();
+            var consecutiveTimeouts = 0;
+            while (true) {
+                var chunk = audioStream.take(Duration.ofMillis(100));
+                if (audioStream.isEnd(chunk)) {
+                    finishFirstCall(currentCall);
+                    return new SpeechToTextResult("ping", "test", 0);
+                }
+                if (chunk.length == 0) {
+                    consecutiveTimeouts++;
+                    if (consecutiveTimeouts >= 2) {
+                        finishFirstCall(currentCall);
+                        return new SpeechToTextResult("ping", "test", 0);
+                    }
+                    continue;
+                }
+                chunkCount.incrementAndGet();
+                consecutiveTimeouts = 0;
+            }
+        }
+
+        private boolean awaitFinished() throws InterruptedException {
+            return firstCallFinished.await(1, TimeUnit.SECONDS);
+        }
+
+        private int chunkCount() {
+            return chunkCount.get();
+        }
+
+        private void finishFirstCall(int currentCall) {
+            if (currentCall == 1) {
+                firstCallFinished.countDown();
+            }
+        }
+    }
+
+    private static class EndAwareStreamingSpeechToTextClient implements StreamingSpeechToTextClient {
+
+        private final CountDownLatch started = new CountDownLatch(1);
+        private final CountDownLatch endReceived = new CountDownLatch(1);
+
+        @Override
+        public SpeechToTextResult transcribe(SpeechToTextAudioStream audioStream) {
+            started.countDown();
+            while (true) {
+                var chunk = audioStream.take(Duration.ofMillis(100));
+                if (audioStream.isEnd(chunk)) {
+                    endReceived.countDown();
+                    return new SpeechToTextResult("ping", "test", 0);
+                }
+            }
+        }
+
+        private boolean awaitStarted() throws InterruptedException {
+            return started.await(1, TimeUnit.SECONDS);
+        }
+
+        private boolean awaitEnd() throws InterruptedException {
+            return endReceived.await(1, TimeUnit.SECONDS);
+        }
+    }
+
+    private static class ReplacedTurnFailingStreamingSpeechToTextClient implements StreamingSpeechToTextClient {
+
+        private final AtomicInteger callCount = new AtomicInteger();
+        private final AtomicInteger secondChunkCount = new AtomicInteger();
+        private final CountDownLatch firstCallStarted = new CountDownLatch(1);
+        private final CountDownLatch secondCallStarted = new CountDownLatch(1);
+        private final CountDownLatch oldTurnReadyToFail = new CountDownLatch(1);
+        private final CountDownLatch allowOldFailure = new CountDownLatch(1);
+
+        @Override
+        public SpeechToTextResult transcribe(SpeechToTextAudioStream audioStream) {
+            var currentCall = callCount.incrementAndGet();
+            if (currentCall == 1) {
+                return failAfterReplacement(audioStream);
+            }
+            return captureSecondTurn(audioStream);
+        }
+
+        private SpeechToTextResult failAfterReplacement(SpeechToTextAudioStream audioStream) {
+            firstCallStarted.countDown();
+            while (true) {
+                var chunk = audioStream.take(Duration.ofMillis(100));
+                if (audioStream.isEnd(chunk)) {
+                    oldTurnReadyToFail.countDown();
+                    await(allowOldFailure);
+                    throw new IllegalStateException("old streaming turn failed after replacement");
+                }
+            }
+        }
+
+        private SpeechToTextResult captureSecondTurn(SpeechToTextAudioStream audioStream) {
+            secondCallStarted.countDown();
+            while (true) {
+                var chunk = audioStream.take(Duration.ofMillis(100));
+                if (audioStream.isEnd(chunk)) {
+                    return new SpeechToTextResult("ping", "test", 0);
+                }
+                if (chunk.length > 0) {
+                    secondChunkCount.incrementAndGet();
+                }
+            }
+        }
+
+        private boolean awaitFirstCallStarted() throws InterruptedException {
+            return firstCallStarted.await(1, TimeUnit.SECONDS);
+        }
+
+        private boolean awaitSecondCallStarted() throws InterruptedException {
+            return secondCallStarted.await(1, TimeUnit.SECONDS);
+        }
+
+        private boolean awaitOldTurnReadyToFail() throws InterruptedException {
+            return oldTurnReadyToFail.await(1, TimeUnit.SECONDS);
+        }
+
+        private void releaseOldFailure() {
+            allowOldFailure.countDown();
+        }
+
+        private boolean awaitSecondChunkCountAtLeast(int expected) {
+            var deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+            while (System.nanoTime() < deadline) {
+                if (secondChunkCount.get() >= expected) {
+                    return true;
+                }
+                Thread.onSpinWait();
+            }
+            return secondChunkCount.get() >= expected;
+        }
+    }
+
+    private static class ReleaseAfterEndStreamingSpeechToTextClient implements StreamingSpeechToTextClient {
+
+        private final CountDownLatch endReceived = new CountDownLatch(1);
+        private final CountDownLatch releaseResult = new CountDownLatch(1);
+
+        @Override
+        public SpeechToTextResult transcribe(SpeechToTextAudioStream audioStream) {
+            while (true) {
+                var chunk = audioStream.take(Duration.ofMillis(100));
+                if (audioStream.isEnd(chunk)) {
+                    endReceived.countDown();
+                    await(releaseResult);
+                    return new SpeechToTextResult("ping", "test", 0);
+                }
+            }
+        }
+
+        private boolean awaitEnd() throws InterruptedException {
+            return endReceived.await(1, TimeUnit.SECONDS);
+        }
+
+        private void releaseResult() {
+            releaseResult.countDown();
+        }
+    }
+
+    private static class ImmediateStreamingSpeechToTextClient implements StreamingSpeechToTextClient {
+
+        @Override
+        public SpeechToTextResult transcribe(SpeechToTextAudioStream audioStream) {
+            return new SpeechToTextResult("ping", "test", 0);
+        }
+    }
+
+    private static class SttBlockingEventFactory extends XiaozhiServerEventFactory {
+
+        private final CountDownLatch sttPayloadRequested = new CountDownLatch(1);
+        private final CountDownLatch releaseSttPayload = new CountDownLatch(1);
+
+        SttBlockingEventFactory() {
+            super(new ObjectMapper());
+        }
+
+        @Override
+        public String stt(String sessionId, String text) {
+            sttPayloadRequested.countDown();
+            await(releaseSttPayload);
+            return super.stt(sessionId, text);
+        }
+
+        private boolean awaitSttPayloadRequested() throws InterruptedException {
+            return sttPayloadRequested.await(1, TimeUnit.SECONDS);
+        }
+
+        private void releaseSttPayload() {
+            releaseSttPayload.countDown();
+        }
+    }
+
+    private static byte[] encodeOpusFrame() {
+        try {
+            var sampleRate = 16_000;
+            var pcm = new short[sampleRate * 60 / 1000];
+            Arrays.fill(pcm, (short) 1000);
+            var output = new byte[1024];
+            var encoder = new OpusEncoder(sampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
+            var encodedBytes = encoder.encode(pcm, 0, pcm.length, output, 0, output.length);
+            return Arrays.copyOf(output, encodedBytes);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Failed to encode Opus test frame", exception);
+        }
+    }
+
+    private static boolean awaitIdle(XiaozhiVoiceSessionService service, TestWebSocketSession session) {
+        var deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+        while (System.nanoTime() < deadline) {
+            if (service.getSession(session.getId()).state() == XiaozhiVoiceSession.State.IDLE) {
+                return true;
+            }
+            Thread.onSpinWait();
+        }
+        return service.getSession(session.getId()).state() == XiaozhiVoiceSession.State.IDLE;
+    }
+
+    private static boolean awaitCondition(BooleanSupplier condition, Duration timeout) {
+        var deadline = System.nanoTime() + timeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            if (condition.getAsBoolean()) {
+                return true;
+            }
+            Thread.onSpinWait();
+        }
+        return condition.getAsBoolean();
+    }
+
+    private static boolean hasTextMessageContaining(TestWebSocketSession session, String expected) {
+        return session.getSentMessages().stream()
+                .filter(TextMessage.class::isInstance)
+                .map(message -> ((TextMessage) message).getPayload())
+                .anyMatch(payload -> payload.contains(expected));
     }
 
     private static void await(java.util.concurrent.CountDownLatch latch) {

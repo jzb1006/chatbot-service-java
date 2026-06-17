@@ -41,8 +41,10 @@ chatbot:
       channels: ${CHATBOT_VOICE_AUDIO_CHANNELS:1}
       frame-duration: ${CHATBOT_VOICE_AUDIO_FRAME_DURATION:60}
     asr:
+      mode: ${CHATBOT_VOICE_ASR_MODE:sentence}
       provider: ${CHATBOT_VOICE_ASR_PROVIDER:fake}
       tencent:
+        app-id: ${TENCENT_CLOUD_APP_ID:}
         secret-id: ${TENCENT_CLOUD_SECRET_ID:}
         secret-key: ${TENCENT_CLOUD_SECRET_KEY:}
         region: ap-guangzhou
@@ -51,6 +53,8 @@ chatbot:
         voice-format: ${TENCENT_CLOUD_ASR_VOICE_FORMAT:pcm}
         sample-rate: 16000
         timeout-seconds: 15
+        chunk-timeout-millis: ${TENCENT_CLOUD_ASR_CHUNK_TIMEOUT_MILLIS:100}
+        recognition-timeout-seconds: ${TENCENT_CLOUD_ASR_RECOGNITION_TIMEOUT_SECONDS:90}
     tts:
       provider: tencent
       tencent:
