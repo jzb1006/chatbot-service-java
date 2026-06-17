@@ -25,6 +25,7 @@ OPCODE_BINARY = 0x2
 OPCODE_CLOSE = 0x8
 OPCODE_PING = 0x9
 OPCODE_PONG = 0xA
+VALID_OPUS_SILENCE_FRAME = base64.b64decode("+P/+")
 
 
 @dataclass(frozen=True)
@@ -222,7 +223,7 @@ def smoke_url(url: str, args: argparse.Namespace) -> None:
             "state": "start",
             "mode": "manual",
         })
-        websocket.send_binary(b"\x01\x02\x03")
+        websocket.send_binary(VALID_OPUS_SILENCE_FRAME)
         websocket.send_text({
             "session_id": server_hello.get("session_id", args.client_id),
             "type": "listen",

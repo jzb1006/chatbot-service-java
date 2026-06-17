@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 文档用途：作为当前 Java 服务端对接小智 ESP32 固件的执行清单。
-- 当前结论：可以开始执行第一轮 Sprint；腾讯云 ASR 接入、真机 TTS 播放验收和 OTA 仍受外部条件约束。
+- 当前结论：流式 ASR 与 Hermes structured event 的软件链路已完成；物理真机麦克风、扬声器和 OTA token 下发仍待真机复测。
 - 执行原则：先完成不依赖硬件的软件闭环，再做真机端到端联调。
 - 代码边界：当前仓库只做 Java 服务端中间件，不迁入 ESP32 固件代码。
 - 参考边界：只摘取 `joey-zhou/xiaozhi-esp32-server-java` 的协议和实现思路，不迁移其 MySQL、Redis、后台管理和双进程架构。
@@ -35,7 +35,8 @@
 - [x] Fake ASR / Fake TTS 可支撑本地协议闭环测试。
 - [x] 腾讯云 TTS 已接入，服务器上已配置腾讯云参数。
 - [x] WebSocket token 已支持通过配置强制鉴权，兼容 `Bearer <token>` 和纯 token。
-- [x] ASR 首版已接入腾讯云一句话识别 Provider，默认仍保留 Fake 回退；真实云识别待部署配置后验证。
+- [x] ASR 已支持 `sentence` / `streaming` 模式切换；`streaming` 模式接入腾讯实时语音识别链路，默认仍保留 Fake 回退。
+- [x] Hermes structured event 已作为提醒等语义动作入口；Java 生产路径不再从用户自然语言中本地解析提醒、意图或情绪。
 - [ ] 腾讯云 TTS 尚未完成小智真机播放验收。
 - [x] OTA / 激活配置接口已实现服务端薄能力并通过公网 smoke；真机 OTA token 下发待设备白名单后验证。
 - [x] MCP 已实现 Hermes 到在线小智设备的薄透传桥并通过公网模拟设备验证；真机设备工具调用验证待完成。
@@ -45,7 +46,7 @@
 | 类别 | 当前状态 | 对执行的影响 | 处理方式 |
 |------|----------|--------------|----------|
 | 硬件真机 | 未在本文档中确认可用 | 阻塞真机播放、唤醒、麦克风、扬声器验收 | 第一轮先做本地和公网 WebSocket smoke |
-| ASR Provider | 已实现腾讯云一句话识别 Provider | 不再阻塞服务端代码；阻塞点转为云参数和真实音频识别验证 | 配置 `chatbot.voice.asr.provider=tencent` 后使用腾讯云 |
+| ASR Provider | 已实现 `sentence` / `streaming` 模式切换，流式 ASR 软件链路已完成 | 不再阻塞服务端代码；物理麦克风采集质量和腾讯实时 ASR 线上参数仍需真机复测 | 配置 `CHATBOT_VOICE_ASR_MODE=streaming` 后使用流式 ASR |
 | TTS 配置 | 腾讯云 TTS 已接入且服务器已配置；下行 binary 已按 `Protocol-Version` 编码 | 不再阻塞服务端实现；仍需验证真机播放 | 保留 Fake 回退，硬件到位后做播放验收 |
 | 音频参数 | server hello 已支持配置化 `audio_params` | 不阻塞服务端代码；上线时需确认与真实 TTS 输出一致 | 默认 `opus/16000/1/60`，可用环境变量覆盖 |
 | WebSocket token 来源 | 需要服务端配置来源 | 阻塞强制鉴权 | 第一轮用环境变量或现有设备配置做最小实现 |
@@ -74,7 +75,7 @@
 ### 主要阶段
 
 1. 第一轮可执行 Sprint：WebSocket 鉴权、运行观测日志、失败路径测试、联调脚本。
-2. 基础语音闭环补齐：接入腾讯云 ASR，确认 TTS 真机可播放。
+2. 基础语音闭环补齐：接入腾讯云 ASR，完成流式 ASR + Hermes structured event 软件链路，确认 TTS 真机可播放。
 3. 真机连接与配置：硬件刷小智固件后完成公网端到端联调，按需决定 OTA/激活配置。
 4. 增强能力：按需补 MCP 透传、打断优化、设备管理等非首发能力。
 
@@ -115,7 +116,7 @@
 ### Sprint 1.3：真实闭环失败路径测试
 
 - 对应任务：任务 1.3。
-- 当前状态：已完成自动化测试；新增覆盖下行 binary 编码、会话控制和失败事件回传；真实 ASR 和真机播放仍依赖后续条件。
+- 当前状态：已完成自动化测试；新增覆盖下行 binary 编码、会话控制、失败事件回传、流式 ASR 回合和 Hermes structured event；物理真机麦克风和扬声器验收仍依赖后续条件。
 - 推荐实现：继续保留 Fake ASR/TTS，补异常分支测试，不引入真实厂商依赖。
 - 最小范围：
   - ASR 返回空文本时不调用 Hermes，并给出可定位日志。
@@ -197,7 +198,7 @@ mvn -pl chatbot-voice-gateway -am test
   - 目标：替换当前 `FakeSpeechToTextClient`，让设备真实语音可以转成文本。
   - 输入：小智固件上行 Opus 音频帧、腾讯云 ASR 配置、音频解码/转码结果。
   - 输出：`SpeechToTextClient` 的腾讯云实现。
-  - 当前状态：已完成 Provider、配置、Bean 装配和单元测试；真实云识别待部署配置后验证。
+  - 当前状态：已完成一句话 Provider、流式 ASR Provider、模式切换配置、Bean 装配和单元测试；真实设备麦克风采集质量待真机验证。
   - 依赖条件：腾讯云 ASR 参数和真实小智音频样本；如复用现有腾讯云账号，则设置对应环境变量。
   - 涉及文件：
     - `chatbot-speech-api/src/main/java/com/jzb/chatbot/speech/SpeechToTextClient.java`
@@ -218,10 +219,10 @@ mvn -pl chatbot-voice-gateway -am test
     - `chatbot.voice.asr.tencent.endpoint`
     - `chatbot.voice.asr.tencent.sample-rate=16000`
   - 验收标准：
-    - WebSocket 收到设备音频后，ASR 返回真实用户语音文本。（待部署配置和真实音频验证）
+    - WebSocket 收到设备音频后，ASR 返回真实用户语音文本。（软件链路已覆盖；真机麦克风采集质量待复测）
     - 保留 Fake ASR 作为本地测试回退通道。
-    - `chatbot.voice.asr.provider=fake` 时不访问腾讯云。
-    - `chatbot.voice.asr.provider=tencent` 且密钥缺失时启动失败信息明确。
+    - `chatbot.voice.asr.mode=sentence` 和 `chatbot.voice.asr.mode=streaming` 路由互斥。
+    - `chatbot.voice.asr.mode=streaming` 且密钥缺失时启动失败信息明确。
     - ASR 失败时向日志输出可定位错误，不导致 WebSocket 会话异常泄漏。
     - `mvn -pl chatbot-voice-gateway -am test` 通过。
   - 预估工作量：1-2 天。
@@ -437,11 +438,12 @@ mvn -pl chatbot-voice-gateway -am test
 4. 已完成：真实闭环失败路径测试。
 5. 已完成：本地 WebSocket smoke 脚本，覆盖三个连接路径和握手头。
 6. 已完成：按 TTS 模式接入腾讯云 ASR。
-7. 任务实现完成后：构建并部署到服务器 `203.195.202.54:8766`。
-8. 部署后：用公网 WebSocket smoke 验证服务端链路。
-9. 硬件到位后：执行小智真机端到端语音测试，并记录测试结果。
-10. 真机联调稳定后：决定是否进入 OTA/激活配置接口。
-11. 需要设备控制时：追加 MCP 薄透传桥。
+7. 已完成：补齐流式 ASR、ASR 模式切换和 Hermes structured event 软件链路。
+8. 任务实现完成后：构建并部署到服务器 `203.195.202.54:8766`。
+9. 部署后：用公网 WebSocket smoke 验证服务端链路。
+10. 硬件到位后：执行小智真机端到端语音测试，并记录测试结果。
+11. 真机联调稳定后：决定是否进入 OTA/激活配置接口。
+12. 需要设备控制时：追加 MCP 薄透传桥。
 
 ## 当前不建议立即做的事项
 
@@ -470,7 +472,7 @@ mvn -pl chatbot-voice-gateway -am test
 - 首版使用腾讯云一句话识别，将本轮 Opus 音频聚合后提交。
 - 后续需要边说边识别时再升级为实时语音识别流式接口。
 
-**状态**：已实现腾讯云一句话识别 Provider，真实云识别待部署配置和真实音频验证。
+**状态**：已实现腾讯云一句话识别 Provider 和实时语音识别流式 Provider；软件链路已覆盖 `sentence` / `streaming` 模式切换，真实设备麦克风采集质量待真机验证。
 
 ### 问题 3：固件配置方式
 
@@ -631,4 +633,24 @@ Hermes HTTP JSON-RPC 结果：tools/list 返回 xiaozhi_list_online_devices、xi
 最终结论：最新 OTA/MCP 版本已部署到公网，REST、OTA、WebSocket 真实语音、Hermes、TTS、MCP 鉴权和模拟设备透传软件链路均通过；物理真机 OTA token 下发、真机设备 MCP 工具和扬声器播放仍需真实设备验证
 失败现象与日志位置：第一次 WebSocket smoke 使用 3 字节假音频，真实 ASR 返回空文本并触发 asr_empty；改用 16k PCM 语音样本经项目 Opus 编码器生成 50 帧后通过。容器日志显示 xiaozhi turn completed, audioFrames=50, ttsFrames=16, asrMillis=198, hermesMillis=2751, ttsMillis=737
 下一步处理：提供真实小智设备的 Device-Id 或序列号后，补充 XIAOZHI_OTA_ALLOWED_DEVICE_IDS 或 XIAOZHI_OTA_ALLOWED_SERIAL_NUMBERS，并用真机验证 OTA token 下发、设备 MCP tools/list/tools/call 和扬声器播放
+```
+
+### 2026-06-18 流式 ASR / Hermes structured event 本地软件验证
+
+```text
+测试时间：2026-06-18 05:12:39 +0800
+部署版本 / Git commit：本地工作树未提交；未执行部署
+服务器地址：127.0.0.1:8766
+WebSocket 路径：/xiaozhi/v1
+固件设备 ID：本地 smoke 模拟设备；非物理真机
+Client ID：本地 smoke 模拟客户端
+ASR 模式：streaming fake smoke；同时通过代码审查确认 sentence / streaming 模式切换链路
+token 鉴权结果：本地 smoke 按当前本地配置执行
+设备 hello / server hello：本地软件 smoke 通过，输出 OK ws://127.0.0.1:8766/xiaozhi/v1
+ASR 识别文本：由本地软件链路和测试桩覆盖；未使用物理麦克风采集
+Hermes 回复摘要：使用本地 Hermes mock 覆盖 structured event 链路；生产路径由 Hermes 返回 xiaozhi.agent_event 后 Java 执行动作
+TTS 播放结果：本地软件链路覆盖 TTS 事件和音频帧发送；未执行物理扬声器验收
+最终结论：流式 ASR + Hermes structured event 软件链路完成；生产路径未发现 Java 本地意图解析；物理真机麦克风、扬声器和 OTA token 下发仍待真机复测
+失败现象与日志位置：未执行真机；spring-boot:run 在 reactor 下存在根 POM 无 main class 的启动方式 concern，不阻断 java -jar 本地 smoke
+下一步处理：硬件到位后使用真实小智设备复测麦克风 ASR、Hermes 回复、TTS 扬声器播放和 OTA token 下发
 ```
