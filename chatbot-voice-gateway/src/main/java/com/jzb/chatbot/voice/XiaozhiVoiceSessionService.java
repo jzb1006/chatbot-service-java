@@ -51,6 +51,8 @@ public class XiaozhiVoiceSessionService {
     private final XiaozhiVoiceTokenAuth tokenAuth;
     private final XiaozhiMcpBridge mcpBridge;
     private final Map<String, XiaozhiVoiceSession> sessions = new ConcurrentHashMap<>();
+    private final Map<String, WebSocketSession> webSocketSessions = new ConcurrentHashMap<>();
+    private final Map<String, String> deviceSessionIds = new ConcurrentHashMap<>();
 
     /**
      * 打开新的语音会话。
@@ -73,6 +75,8 @@ public class XiaozhiVoiceSessionService {
             return false;
         }
         sessions.put(session.getId(), voiceSession);
+        webSocketSessions.put(session.getId(), session);
+        deviceSessionIds.put(voiceSession.deviceId(), session.getId());
         mcpBridge.register(voiceSession.deviceId(), session.getId(), session);
         log.info("xiaozhi websocket connected, sessionId={}, deviceId={}, clientId={}, protocolVersion={}, authRequired={}, authResult=success",
                 session.getId(),
@@ -100,8 +104,11 @@ public class XiaozhiVoiceSessionService {
      */
     public void close(WebSocketSession session) {
         var voiceSession = sessions.remove(session.getId());
+        webSocketSessions.remove(session.getId());
         if (voiceSession != null) {
             voiceSession.cancelPlayback();
+            deviceSessionIds.computeIfPresent(voiceSession.deviceId(), (key, currentSessionId) ->
+                    session.getId().equals(currentSessionId) ? null : currentSessionId);
             mcpBridge.unregister(voiceSession.deviceId(), session.getId());
         }
         log.info("xiaozhi websocket closed, sessionId={}", session.getId());
@@ -192,6 +199,46 @@ public class XiaozhiVoiceSessionService {
         }
         log.debug("ignore xiaozhi binary frame outside listening, sessionId={}, state={}, bytes={}",
                 webSocketSession.getId(), voiceSession.state(), frame.payload().length);
+    }
+
+    /**
+     * 向在线设备主动播报文本。
+     *
+     * @param deviceId 设备 ID
+     * @param text 播报文本
+     * @return true 表示已下发播报
+     */
+    public boolean notifyDevice(String deviceId, String text) {
+        if (deviceId == null || deviceId.isBlank() || text == null || text.isBlank()) {
+            return false;
+        }
+        var sessionId = deviceSessionIds.get(deviceId);
+        if (sessionId == null) {
+            return false;
+        }
+        var webSocketSession = webSocketSessions.get(sessionId);
+        var voiceSession = sessions.get(sessionId);
+        if (webSocketSession == null || voiceSession == null || !webSocketSession.isOpen()) {
+            deviceSessionIds.remove(deviceId, sessionId);
+            return false;
+        }
+        if (voiceSession.state() != XiaozhiVoiceSession.State.IDLE) {
+            log.info("xiaozhi notification skipped because session is busy, sessionId={}, deviceId={}, state={}",
+                    sessionId, deviceId, voiceSession.state());
+            return false;
+        }
+        var playback = new XiaozhiTtsPlayback(webSocketSession, voiceSession, codec, eventFactory);
+        voiceSession.updatePlayback(playback);
+        voiceSession.markSpeaking();
+        sendText(webSocketSession, eventFactory.llmEmotion(voiceSession.sessionId(), "neutral"));
+        sendText(webSocketSession, eventFactory.ttsStart(voiceSession.sessionId()));
+        var sent = false;
+        try {
+            sent = speakSentences(webSocketSession, voiceSession, playback, List.of(text), System.nanoTime());
+        } finally {
+            finishNotification(webSocketSession, voiceSession, playback);
+        }
+        return sent;
     }
 
     private void processTurn(WebSocketSession webSocketSession, XiaozhiVoiceSession voiceSession) {
@@ -375,6 +422,18 @@ public class XiaozhiVoiceSessionService {
                 asrMillis,
                 elapsedMillis(turnStartedAt),
                 elapsedMillis(ttsStartedAt));
+        if (!playback.cancelled()) {
+            voiceSession.markIdle();
+        }
+    }
+
+    private void finishNotification(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiTtsPlayback playback
+    ) {
+        trySendTtsStop(webSocketSession, voiceSession, playback);
+        voiceSession.updatePlayback(null);
         if (!playback.cancelled()) {
             voiceSession.markIdle();
         }

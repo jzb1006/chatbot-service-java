@@ -18,6 +18,7 @@ class XiaozhiHermesStreamTextExtractor {
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     private final StringBuilder buffer = new StringBuilder();
+    private boolean deltaReceived;
 
     public List<String> accept(String chunk) {
         if (chunk == null || chunk.isEmpty()) {
@@ -56,8 +57,13 @@ class XiaozhiHermesStreamTextExtractor {
         }
         try {
             var root = OBJECT_MAPPER.readTree(data.toString());
+            var eventType = eventType(event);
             if (!root.path("delta").isMissingNode()) {
+                deltaReceived = true;
                 return text(root.path("delta").asText());
+            }
+            if (deltaReceived && eventType != null && eventType.startsWith("response.")) {
+                return List.of();
             }
             if (!root.path("answer").isMissingNode()) {
                 return text(root.path("answer").asText());
@@ -72,6 +78,15 @@ class XiaozhiHermesStreamTextExtractor {
         } catch (IOException exception) {
             return List.of();
         }
+    }
+
+    private String eventType(String event) {
+        for (var line : event.split("\n")) {
+            if (line.startsWith("event:")) {
+                return line.substring("event:".length()).trim();
+            }
+        }
+        return null;
     }
 
     private List<String> text(String value) {

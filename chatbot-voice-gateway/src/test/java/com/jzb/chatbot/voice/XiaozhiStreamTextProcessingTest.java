@@ -22,6 +22,16 @@ class XiaozhiStreamTextProcessingTest {
     }
 
     @Test
+    void shouldIgnoreFinalAggregatedTextAfterResponsesDeltas() {
+        var extractor = new XiaozhiHermesStreamTextExtractor();
+
+        assertThat(extractor.accept("event: response.output_text.delta\ndata: {\"delta\":\"你好\"}\n\n"))
+                .containsExactly("你好");
+        assertThat(extractor.accept("event: response.completed\ndata: {\"output_text\":\"你好\"}\n\n"))
+                .isEmpty();
+    }
+
+    @Test
     void shouldSegmentCompleteChineseSentencesAndFlushTail() {
         var segmenter = new XiaozhiSentenceSegmenter();
 

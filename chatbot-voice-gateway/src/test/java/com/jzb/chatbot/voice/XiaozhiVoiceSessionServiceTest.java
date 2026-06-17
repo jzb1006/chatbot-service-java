@@ -548,8 +548,79 @@ class XiaozhiVoiceSessionServiceTest {
                 .satisfies(json -> assertThat(json.path("result").path("tools").isArray()).isTrue());
     }
 
+    @Test
+    void shouldNotifyOnlineDeviceWithReminderSpeech() {
+        var headers = new HttpHeaders();
+        headers.set("Device-Id", "device-1");
+        var session = new TestWebSocketSession("ws-session-1", URI.create("ws://127.0.0.1/xiaozhi/v1"), headers);
+        service.open(session);
+        service.handleHello(session, new XiaozhiClientHello(
+                "hello",
+                1,
+                Map.of("mcp", true),
+                "websocket",
+                XiaozhiAudioParams.defaults()
+        ));
+
+        var notified = service.notifyDevice("device-1", "提醒时间到了");
+
+        assertThat(notified).isTrue();
+        assertThat(service.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"llm\"", "\"emotion\":\"neutral\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"start\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "\"text\":\"提醒时间到了\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"stop\""));
+        assertThat(session.getSentMessages())
+                .anySatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
+    }
+
+    @Test
+    void shouldReturnFalseWhenReminderDeviceIsOffline() {
+        var notified = service.notifyDevice("missing-device", "提醒时间到了");
+
+        assertThat(notified).isFalse();
+    }
+
+    @Test
+    void shouldReturnFalseWhenReminderDeviceIsBusy() {
+        var session = openSession();
+        service.handleText(session, new XiaozhiClientMessage("listen", "start", "manual", null, null, null, null));
+
+        var notified = service.notifyDevice("ws-session-1", "提醒时间到了");
+
+        assertThat(notified).isFalse();
+        assertThat(service.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.LISTENING);
+    }
+
+    @Test
+    void shouldReturnFalseWhenReminderSpeechFails() {
+        var serviceWithFailingTts = newService(new FailingTextToSpeechClient());
+        var session = openSession(serviceWithFailingTts);
+
+        var notified = serviceWithFailingTts.notifyDevice("ws-session-1", "提醒时间到了");
+
+        assertThat(notified).isFalse();
+        assertThat(serviceWithFailingTts.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
     private TestWebSocketSession openSession() {
         return openSession(service);
+    }
+
+    private XiaozhiVoiceSessionService newService(TextToSpeechClient textToSpeechClient) {
+        return new XiaozhiVoiceSessionService(
+                codec,
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                textToSpeechClient,
+                new XiaozhiServerEventFactory(new ObjectMapper()),
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge()
+        );
     }
 
     private TestWebSocketSession openSession(XiaozhiVoiceSessionService service) {

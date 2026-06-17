@@ -146,11 +146,12 @@ POST http://203.195.202.54:8766/api/hermes/xiaozhi/mcp
 Authorization: Bearer <hermes-mcp-token>
 ```
 
-Hermes 侧 `tools/list` 会看到三个稳定工具：
+Hermes 侧 `tools/list` 会看到四个稳定工具：
 
 - `xiaozhi_list_online_devices`
 - `xiaozhi_list_device_tools`
 - `xiaozhi_call_device_tool`
+- `xiaozhi_create_reminder`
 
 MCP 边界：
 
@@ -158,13 +159,16 @@ MCP 边界：
 - Java 侧只做 Hermes 与在线小智设备之间的 JSON-RPC 薄透传桥。
 - Hermes 负责工具调用、编排和记忆。
 - 当前入口是 Spring MVC HTTP JSON-RPC endpoint，不是完整 MCP stdio/SSE transport。
+- `xiaozhi_create_reminder` 是进程内一次性提醒，到期后通过在线 WebSocket 会话主动 TTS 播报；
+  `message` 必填，`remindAt` 支持 ISO-8601 绝对时间，`delaySeconds` 支持相对延迟；
+  当前不持久化，服务重启会丢失未触发提醒。
 
 ## 暂不支持
 
 - 不支持流式实时 ASR；当前真实 ASR 首版使用腾讯云一句话识别。
 - 不实现完整 MCP stdio/SSE transport。
 - 不提供管理后台。
-- 不接 MySQL/Redis。
+- 不接 MySQL/Redis 持久化提醒。
 - 不做 RAG、长期记忆存储和 OTA 包上传后台。
 - 不做声纹识别。
 - 不迁移固件代码。
