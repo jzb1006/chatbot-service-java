@@ -8,3 +8,4 @@ target/
 *.env
 !.env.example
 !*/*.env.example
+/.superpowers/
