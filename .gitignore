@@ -9,3 +9,6 @@ target/
 !.env.example
 !*/*.env.example
 /.superpowers/
+/.merge-backup/
+/.zcf/
+__pycache__/
