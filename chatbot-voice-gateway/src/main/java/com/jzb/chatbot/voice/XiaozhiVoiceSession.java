@@ -33,6 +33,7 @@ public class XiaozhiVoiceSession {
     private String clientId;
     private String conversationId;
     private long conversationSequence;
+    private volatile XiaozhiTtsPlayback playback;
 
     public XiaozhiVoiceSession(String sessionId) {
         this.sessionId = sessionId;
@@ -112,6 +113,18 @@ public class XiaozhiVoiceSession {
     public void markIdle() {
         state = State.IDLE;
         audioFrames.clear();
+    }
+
+    public void updatePlayback(XiaozhiTtsPlayback playback) {
+        this.playback = playback;
+    }
+
+    public XiaozhiTtsPlayback cancelPlayback() {
+        var currentPlayback = playback;
+        if (currentPlayback != null) {
+            currentPlayback.cancel();
+        }
+        return currentPlayback;
     }
 
     public void addAudioFrame(XiaozhiAudioFrame frame) {

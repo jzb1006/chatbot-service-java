@@ -207,6 +207,64 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldSynthesizeEachStreamedSentenceSeparately() {
+        var ttsClient = new RecordingTextToSpeechClient();
+        var serviceWithStreamingHermes = new XiaozhiVoiceSessionService(
+                codec,
+                new FakeSpeechToTextClient(),
+                new StreamingHermesClient("第一句内容很完整。", "第二句内容也完整。"),
+                ttsClient,
+                new XiaozhiServerEventFactory(new ObjectMapper()),
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge()
+        );
+        var session = openSession(serviceWithStreamingHermes);
+
+        runSingleTurn(serviceWithStreamingHermes, session);
+
+        assertThat(ttsClient.texts()).containsExactly("第一句内容很完整。", "第二句内容也完整。");
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "\"text\":\"第一句内容很完整。\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "\"text\":\"第二句内容也完整。\""));
+    }
+
+    @Test
+    void shouldCancelQueuedStreamingTtsWhenAbortReceived() {
+        var ttsClient = new BlockingTextToSpeechClient();
+        var serviceWithStreamingHermes = new XiaozhiVoiceSessionService(
+                codec,
+                new FakeSpeechToTextClient(),
+                new StreamingHermesClient("第一句内容很完整。", "第二句内容也完整。"),
+                ttsClient,
+                new XiaozhiServerEventFactory(new ObjectMapper()),
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge()
+        );
+        var session = openSession(serviceWithStreamingHermes);
+        var turnThread = Thread.startVirtualThread(() -> runSingleTurn(serviceWithStreamingHermes, session));
+        assertThat(ttsClient.awaitFirstCall()).isTrue();
+
+        serviceWithStreamingHermes.handleText(session, new XiaozhiClientMessage(
+                "abort", null, null, "wake_word_detected", null, "ws-session-1", null
+        ));
+        ttsClient.releaseFirstCall();
+        join(turnThread);
+
+        assertThat(ttsClient.texts()).containsExactly("第一句内容很完整。");
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .filteredOn(payload -> payload.contains("\"type\":\"tts\"")
+                        && payload.contains("\"state\":\"stop\""))
+                .hasSize(1);
+        assertThat(serviceWithStreamingHermes.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
+    @Test
     void shouldUseFirmwareDeviceIdWhenCallingHermes() {
         var hermesClient = new CapturingHermesClient();
         var serviceWithCapturingHermes = new XiaozhiVoiceSessionService(
@@ -546,7 +604,8 @@ class XiaozhiVoiceSessionServiceTest {
 
         @Override
         public Stream<String> streamChat(HermesRequest request, HermesClientConfig config) {
-            return Stream.of();
+            this.request = request;
+            return Stream.of("event: message\ndata: {\"answer\":\"pong\"}\n\n");
         }
 
         private HermesRequest request() {
@@ -566,7 +625,8 @@ class XiaozhiVoiceSessionServiceTest {
 
         @Override
         public Stream<String> streamChat(HermesRequest request, HermesClientConfig config) {
-            return Stream.of();
+            conversationIds.add(request.conversationId().value());
+            return Stream.of("event: message\ndata: {\"answer\":\"pong\"}\n\n");
         }
 
         private List<String> conversationIds() {
@@ -583,7 +643,76 @@ class XiaozhiVoiceSessionServiceTest {
 
         @Override
         public Stream<String> streamChat(HermesRequest request, HermesClientConfig config) {
-            return Stream.of();
+            throw new IllegalStateException("hermes unavailable");
+        }
+    }
+
+    private static class StreamingHermesClient implements HermesClient {
+
+        private final List<String> chunks;
+
+        private StreamingHermesClient(String... chunks) {
+            this.chunks = List.of(chunks);
+        }
+
+        @Override
+        public HermesResponse chat(HermesRequest request, HermesClientConfig config) {
+            return new HermesResponse(request.conversationId(), String.join("", chunks));
+        }
+
+        @Override
+        public Stream<String> streamChat(HermesRequest request, HermesClientConfig config) {
+            return chunks.stream()
+                    .map(chunk -> "event: response.output_text.delta\ndata: {\"delta\":\"" + chunk + "\"}\n\n");
+        }
+    }
+
+    private static class RecordingTextToSpeechClient implements TextToSpeechClient {
+
+        private final java.util.ArrayList<String> texts = new java.util.ArrayList<>();
+
+        @Override
+        public List<ByteBuffer> synthesize(String text, VoiceId voiceId) {
+            texts.add(text);
+            return List.of(ByteBuffer.wrap(text.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        }
+
+        private List<String> texts() {
+            return List.copyOf(texts);
+        }
+    }
+
+    private static class BlockingTextToSpeechClient implements TextToSpeechClient {
+
+        private final java.util.ArrayList<String> texts = new java.util.ArrayList<>();
+        private final java.util.concurrent.CountDownLatch firstCallStarted = new java.util.concurrent.CountDownLatch(1);
+        private final java.util.concurrent.CountDownLatch releaseFirstCall = new java.util.concurrent.CountDownLatch(1);
+
+        @Override
+        public List<ByteBuffer> synthesize(String text, VoiceId voiceId) {
+            texts.add(text);
+            if (texts.size() == 1) {
+                firstCallStarted.countDown();
+                await(releaseFirstCall);
+            }
+            return List.of(ByteBuffer.wrap(text.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        }
+
+        private boolean awaitFirstCall() {
+            try {
+                return firstCallStarted.await(1, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+
+        private void releaseFirstCall() {
+            releaseFirstCall.countDown();
+        }
+
+        private List<String> texts() {
+            return List.copyOf(texts);
         }
     }
 
@@ -641,6 +770,22 @@ class XiaozhiVoiceSessionServiceTest {
                 values.add(Byte.toUnsignedInt(input.get()));
             }
             return List.copyOf(values);
+        }
+    }
+
+    private static void await(java.util.concurrent.CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void join(Thread thread) {
+        try {
+            thread.join(Duration.ofSeconds(1));
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
         }
     }
 }

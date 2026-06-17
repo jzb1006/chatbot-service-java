@@ -20,7 +20,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.stereotype.Service;
 import org.springframework.web.socket.WebSocketSession;
@@ -102,6 +101,7 @@ public class XiaozhiVoiceSessionService {
     public void close(WebSocketSession session) {
         var voiceSession = sessions.remove(session.getId());
         if (voiceSession != null) {
+            voiceSession.cancelPlayback();
             mcpBridge.unregister(voiceSession.deviceId(), session.getId());
         }
         log.info("xiaozhi websocket closed, sessionId={}", session.getId());
@@ -163,6 +163,8 @@ public class XiaozhiVoiceSessionService {
             return;
         }
         if ("abort".equals(message.type())) {
+            var playback = voiceSession.cancelPlayback();
+            trySendTtsStop(webSocketSession, voiceSession, playback);
             voiceSession.markIdle();
             log.info("xiaozhi turn aborted, sessionId={}, deviceId={}, reason={}",
                     webSocketSession.getId(), voiceSession.deviceId(), message.reason());
@@ -214,42 +216,17 @@ public class XiaozhiVoiceSessionService {
             }
             sendText(webSocketSession, eventFactory.stt(voiceSession.sessionId(), userText));
 
-            var hermesStartedAt = System.nanoTime();
-            var reply = chat(webSocketSession, voiceSession, userText);
-            if (reply == null) {
+            var turnStartedAt = System.nanoTime();
+            var result = streamChatAndSpeak(webSocketSession, voiceSession, userText, audioFrameCount, asrMillis, turnStartedAt);
+            if (result.failed()) {
                 return;
             }
-            var hermesMillis = elapsedMillis(hermesStartedAt);
             log.info("xiaozhi conversation turn, sessionId={}, deviceId={}, conversationId={}, userText={}, assistantText={}",
                     webSocketSession.getId(),
                     voiceSession.deviceId(),
                     voiceSession.conversationId(),
                     userText,
-                    reply);
-
-            voiceSession.markSpeaking();
-            sendText(webSocketSession, eventFactory.llmEmotion(voiceSession.sessionId(), "neutral"));
-            sendText(webSocketSession, eventFactory.ttsStart(voiceSession.sessionId()));
-            sendText(webSocketSession, eventFactory.ttsSentenceStart(voiceSession.sessionId(), reply));
-            var ttsStartedAt = System.nanoTime();
-            var synthesizedFrames = synthesizeSpeech(webSocketSession, voiceSession, reply, ttsStartedAt);
-            if (synthesizedFrames == null) {
-                return;
-            }
-            if (!sendAudioFrames(webSocketSession, voiceSession, synthesizedFrames)) {
-                return;
-            }
-            var ttsMillis = elapsedMillis(ttsStartedAt);
-            sendText(webSocketSession, eventFactory.ttsStop(voiceSession.sessionId()));
-            log.info("xiaozhi turn completed, sessionId={}, deviceId={}, audioFrames={}, ttsFrames={}, asrMillis={}, hermesMillis={}, ttsMillis={}",
-                    webSocketSession.getId(),
-                    voiceSession.deviceId(),
-                    audioFrameCount,
-                    synthesizedFrames.size(),
-                    asrMillis,
-                    hermesMillis,
-                    ttsMillis);
-            voiceSession.markIdle();
+                    result.reply());
         } catch (RuntimeException exception) {
             log.warn("xiaozhi turn failed, sessionId={}, deviceId={}, message={}",
                     webSocketSession.getId(), voiceSession.deviceId(), exception.getMessage(), exception);
@@ -278,67 +255,140 @@ public class XiaozhiVoiceSessionService {
         }
     }
 
-    private String chat(WebSocketSession webSocketSession, XiaozhiVoiceSession voiceSession, String userText) {
+    private TurnResult streamChatAndSpeak(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            String userText,
+            int audioFrameCount,
+            long asrMillis,
+            long turnStartedAt
+    ) {
+        var playback = new XiaozhiTtsPlayback(webSocketSession, voiceSession, codec, eventFactory);
+        voiceSession.updatePlayback(playback);
         try {
-            return hermesClient.chat(new HermesRequest(
+            voiceSession.markSpeaking();
+            sendText(webSocketSession, eventFactory.llmEmotion(voiceSession.sessionId(), "neutral"));
+            sendText(webSocketSession, eventFactory.ttsStart(voiceSession.sessionId()));
+            var extractor = new XiaozhiHermesStreamTextExtractor();
+            var segmenter = new XiaozhiSentenceSegmenter();
+            var reply = new StringBuilder();
+            var ttsStartedAt = System.nanoTime();
+            try (var chunks = hermesClient.streamChat(new HermesRequest(
                     new DeviceId(voiceSession.deviceId()),
                     new ConversationId(voiceSession.conversationId()),
                     userText
-            ), hermesClientConfig).text();
+            ), hermesClientConfig)) {
+                for (var chunk : (Iterable<String>) chunks::iterator) {
+                    if (playback.cancelled()) {
+                        break;
+                    }
+                    for (var text : extractor.accept(chunk)) {
+                        reply.append(text);
+                        if (!speakSentences(webSocketSession, voiceSession, playback, segmenter.accept(text), ttsStartedAt)) {
+                            return TurnResult.cancelled(reply.toString());
+                        }
+                    }
+                }
+            }
+            for (var text : extractor.flush()) {
+                reply.append(text);
+                if (!speakSentences(webSocketSession, voiceSession, playback, segmenter.accept(text), ttsStartedAt)) {
+                    return TurnResult.cancelled(reply.toString());
+                }
+            }
+            var finalSentence = segmenter.flush();
+            if (!finalSentence.isBlank()
+                    && !speakSentences(webSocketSession, voiceSession, playback, List.of(finalSentence), ttsStartedAt)) {
+                return TurnResult.cancelled(reply.toString());
+            }
+            finishPlayback(webSocketSession, voiceSession, playback, audioFrameCount, asrMillis, turnStartedAt, ttsStartedAt);
+            return TurnResult.completed(reply.toString());
         } catch (RuntimeException exception) {
             log.warn("xiaozhi hermes failed, sessionId={}, deviceId={}, message={}",
                     webSocketSession.getId(),
                     voiceSession.deviceId(),
                     exception.getMessage(),
                     exception);
+            trySendTtsStop(webSocketSession, voiceSession, playback);
             trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "hermes_failed", "对话服务失败"));
             voiceSession.markIdle();
-            return null;
+            return TurnResult.failure();
+        } finally {
+            voiceSession.updatePlayback(null);
         }
     }
 
-    private List<ByteBuffer> synthesizeSpeech(
+    private boolean speakSentences(
             WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
-            String reply,
+            XiaozhiTtsPlayback playback,
+            List<String> sentences,
             long ttsStartedAt
     ) {
-        try {
-            return textToSpeechClient.synthesize(reply, new VoiceId("default"));
-        } catch (RuntimeException exception) {
-            log.warn("xiaozhi tts failed, sessionId={}, deviceId={}, ttsMillis={}, message={}",
-                    webSocketSession.getId(),
-                    voiceSession.deviceId(),
-                    elapsedMillis(ttsStartedAt),
-                    exception.getMessage(),
-                    exception);
-            trySendText(webSocketSession, eventFactory.ttsStop(voiceSession.sessionId()));
-            trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "tts_failed", "语音合成失败"));
+        for (var sentence : sentences) {
+            if (sentence == null || sentence.isBlank()) {
+                continue;
+            }
+            try {
+                var synthesizedFrames = textToSpeechClient.synthesize(sentence, new VoiceId("default"));
+                if (!playback.playSentence(sentence, synthesizedFrames)) {
+                    return false;
+                }
+            } catch (RuntimeException exception) {
+                log.warn("xiaozhi tts failed, sessionId={}, deviceId={}, ttsMillis={}, message={}",
+                        webSocketSession.getId(),
+                        voiceSession.deviceId(),
+                        elapsedMillis(ttsStartedAt),
+                        exception.getMessage(),
+                        exception);
+                trySendTtsStop(webSocketSession, voiceSession, playback);
+                trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "tts_failed", "语音合成失败"));
+                voiceSession.markIdle();
+                return false;
+            } catch (IOException exception) {
+                log.warn("xiaozhi tts audio send failed, sessionId={}, deviceId={}, message={}",
+                        webSocketSession.getId(), voiceSession.deviceId(), exception.getMessage(), exception);
+                trySendTtsStop(webSocketSession, voiceSession, playback);
+                trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "tts_failed", "语音下发失败"));
+                voiceSession.markIdle();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void finishPlayback(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiTtsPlayback playback,
+            int audioFrameCount,
+            long asrMillis,
+            long turnStartedAt,
+            long ttsStartedAt
+    ) {
+        trySendTtsStop(webSocketSession, voiceSession, playback);
+        log.info("xiaozhi turn completed, sessionId={}, deviceId={}, audioFrames={}, ttsFrames={}, asrMillis={}, hermesMillis={}, ttsMillis={}",
+                webSocketSession.getId(),
+                voiceSession.deviceId(),
+                audioFrameCount,
+                playback.sentFrames(),
+                asrMillis,
+                elapsedMillis(turnStartedAt),
+                elapsedMillis(ttsStartedAt));
+        if (!playback.cancelled()) {
             voiceSession.markIdle();
-            return null;
         }
     }
 
-    private boolean sendAudioFrames(
+    private void trySendTtsStop(
             WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
-            List<ByteBuffer> frames
+            XiaozhiTtsPlayback playback
     ) {
-        try {
-            for (var frame : frames) {
-                webSocketSession.sendMessage(new BinaryMessage(
-                        codec.encodeAudioFrame(voiceSession.protocolVersion(), 0, frame)
-                ));
-            }
-            return true;
-        } catch (IOException exception) {
-            log.warn("xiaozhi tts audio send failed, sessionId={}, deviceId={}, message={}",
-                    webSocketSession.getId(), voiceSession.deviceId(), exception.getMessage(), exception);
-            trySendText(webSocketSession, eventFactory.ttsStop(voiceSession.sessionId()));
-            trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "tts_failed", "语音下发失败"));
-            voiceSession.markIdle();
-            return false;
+        if (playback != null && !playback.markStopSent()) {
+            return;
         }
+        trySendText(webSocketSession, eventFactory.ttsStop(voiceSession.sessionId()));
     }
 
     private void sendText(WebSocketSession webSocketSession, String payload) {
@@ -376,5 +426,20 @@ public class XiaozhiVoiceSessionService {
     }
 
     private record Transcription(String text, boolean failed) {
+    }
+
+    private record TurnResult(String reply, boolean failed) {
+
+        private static TurnResult completed(String reply) {
+            return new TurnResult(reply, false);
+        }
+
+        private static TurnResult cancelled(String reply) {
+            return new TurnResult(reply, false);
+        }
+
+        private static TurnResult failure() {
+            return new TurnResult("", true);
+        }
     }
 }
