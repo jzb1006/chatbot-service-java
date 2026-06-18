@@ -11,6 +11,9 @@ import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
+import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime;
+import com.jzb.chatbot.voice.tts.XiaozhiVoiceProfileResolver;
+import com.jzb.chatbot.common.id.VoiceId;
 import java.net.URI;
 import java.time.Duration;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -222,15 +225,19 @@ class XiaozhiWebSocketHandlerTest {
     }
 
     private XiaozhiVoiceSessionService newSessionService(XiaozhiMessageCodec codec, String expectedToken) {
+        var objectMapper = new ObjectMapper();
+        var eventFactory = new XiaozhiServerEventFactory(objectMapper);
+        var textToSpeechClient = new FakeTextToSpeechClient();
         return new XiaozhiVoiceSessionService(
                 codec,
                 new FakeSpeechToTextClient(),
                 new FakeHermesClient(),
-                new FakeTextToSpeechClient(),
-                new XiaozhiServerEventFactory(new ObjectMapper()),
+                new XiaozhiTtsRuntime(textToSpeechClient, codec, eventFactory),
+                eventFactory,
                 new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
                 new XiaozhiVoiceTokenAuth(expectedToken),
-                new XiaozhiMcpBridge(new XiaozhiServerEventFactory(new ObjectMapper()))
+                new XiaozhiMcpBridge(eventFactory),
+                new XiaozhiVoiceProfileResolver(new VoiceId("default"), 1.0, 1.0)
         );
     }
 }

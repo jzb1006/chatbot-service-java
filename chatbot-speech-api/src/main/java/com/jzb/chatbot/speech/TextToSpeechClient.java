@@ -22,4 +22,16 @@ public interface TextToSpeechClient {
      * @return 音频帧
      */
     List<ByteBuffer> synthesize(String text, VoiceId voiceId);
+
+    /**
+     * 将文本按指定参数合成为音频数据。
+     *
+     * @param text 文本内容
+     * @param options 文本转语音参数
+     * @return 音频帧
+     */
+    default List<ByteBuffer> synthesize(String text, TextToSpeechOptions options) {
+        var effectiveOptions = options == null ? TextToSpeechOptions.defaults() : options;
+        return synthesize(text, effectiveOptions.voiceId());
+    }
 }

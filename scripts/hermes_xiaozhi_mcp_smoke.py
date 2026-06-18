@@ -1,35 +1,38 @@
 #!/usr/bin/env python3
-import argparse
-import json
-import urllib.request
+"""Hermes/Xiaozhi WebSocket 联动 smoke 测试脚本。"""
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--url", required=True)
-parser.add_argument("--token", default="")
-args = parser.parse_args()
+from __future__ import annotations
 
-payload = json.dumps({
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/list",
-}).encode("utf-8")
+import sys
+from pathlib import Path
 
-request = urllib.request.Request(
-    f"{args.url.rstrip('/')}/api/hermes/xiaozhi/mcp",
-    data=payload,
-    headers={
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {args.token}",
-    },
-    method="POST",
-)
 
-with urllib.request.urlopen(request, timeout=10) as response:
-    body = json.loads(response.read().decode("utf-8"))
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-tools = body["result"]["tools"]
-names = [tool["name"] for tool in tools]
-assert "xiaozhi_list_online_devices" in names, body
-assert "xiaozhi_list_device_tools" in names, body
-assert "xiaozhi_call_device_tool" in names, body
-print(json.dumps(body, ensure_ascii=False, indent=2))
+import xiaozhi_ws_smoke  # noqa: E402
+
+
+def main(argv: list[str]) -> int:
+    args = xiaozhi_ws_smoke.parse_args(argv, description="Hermes/Xiaozhi WebSocket 联动 smoke 入口")
+    urls = xiaozhi_ws_smoke.resolve_urls(args)
+    for url in urls:
+        try:
+            stats = xiaozhi_ws_smoke.run_smoke_url(url, args)
+            # 脚本只能从 WebSocket 侧观测 Hermes SSE 的下游 LLM 事件，hermes_sse_output 是代理指标。
+            hermes_sse_output_proxy = stats.llm_count >= 1
+            observed = xiaozhi_ws_smoke.format_bool(hermes_sse_output_proxy)
+            print(f"hermes_sse_output={observed}")
+            print(f"ws_llm_event_observed={observed}")
+            xiaozhi_ws_smoke.print_smoke_stats(stats)
+            xiaozhi_ws_smoke.require(hermes_sse_output_proxy, f"{url}: missing Hermes SSE output proxy")
+            print(f"OK {url}")
+        except Exception as exc:
+            print(f"FAIL {url}: {exc}", file=sys.stderr)
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -632,3 +632,29 @@ Hermes HTTP JSON-RPC 结果：tools/list 返回 xiaozhi_list_online_devices、xi
 失败现象与日志位置：第一次 WebSocket smoke 使用 3 字节假音频，真实 ASR 返回空文本并触发 asr_empty；改用 16k PCM 语音样本经项目 Opus 编码器生成 50 帧后通过。容器日志显示 xiaozhi turn completed, audioFrames=50, ttsFrames=16, asrMillis=198, hermesMillis=2751, ttsMillis=737
 下一步处理：提供真实小智设备的 Device-Id 或序列号后，补充 XIAOZHI_OTA_ALLOWED_DEVICE_IDS 或 XIAOZHI_OTA_ALLOWED_SERIAL_NUMBERS，并用真机验证 OTA token 下发、设备 MCP tools/list/tools/call 和扬声器播放
 ```
+
+### 2026-06-18 任务 13 部署前检查与真机验收状态
+
+```text
+测试时间：2026-06-18 05:05:05 +08:00 之后
+部署版本 / Git commit：未在本轮记录新增部署版本；本记录仅补录部署前检查与真机验收状态
+服务器地址：203.195.202.54:8766
+WebSocket 路径：/xiaozhi/v1
+部署前检查结果：通过
+- TENCENT_CLOUD_SECRET_ID：SET，通过
+- TENCENT_CLOUD_SECRET_KEY：SET，通过
+- CHATBOT_VOICE_DEFAULT_VOICE_ID：MISSING，但应用配置默认 chatbot.voice.default-voice-id=default，满足“已配置或保持默认 default”，通过
+- TENCENT_CLOUD_TTS_VOICE_TYPE：SET，用作 default 音色 fallback，通过
+- Hermes 容器健康：hermes Up 12 hours，通过
+- Java gateway 健康：device_gateway Up 10 hours，且 http://203.195.202.54:8766/actuator/health 返回 {"status":"UP"}，通过
+- OTA 返回：POST http://203.195.202.54:8766/api/ota/check 返回 websocket.url=ws://203.195.202.54:8766/xiaozhi/v1、websocket.version=1、websocket.token=""、firmware version/url 为空，通过
+真机首轮对话：未执行；本轮没有真实小智设备在线/现场触发证据，待真机现场验证，不能标记通过
+真机打断：未执行；本轮没有真实小智设备在线/现场触发证据，待真机现场验证，不能标记通过
+真机通知：未执行；本轮没有真实小智设备在线/现场触发证据，待真机现场验证，不能标记通过
+最终结论：远程部署前条件通过；软件 smoke 在任务 12 已本地验证；物理真机验收仍待设备现场执行
+失败现象与日志位置：本轮未执行物理真机测试，暂无真实设备现场日志
+下一步处理：设备在线后用真实设备连接 ws://203.195.202.54:8766/xiaozhi/v1，逐项执行并补录以下待验收证据：
+- 首轮对话：设备能完成 hello；设备能发送 listen start / audio / listen stop；服务端能返回 stt；Hermes 能返回文本；设备能播放 TTS；服务端日志包含 ttsFrames > 0
+- 真机打断：播放中发送 abort；服务端只发送一次 tts stop；后续句子不继续合成；session 回到 IDLE 或 LISTENING；下一轮对话可继续
+- 真机通知：设备空闲时 notifyDevice 可播报；设备忙碌时 notifyDevice 返回 false；日志能区分 skipped 和 sent
+```
