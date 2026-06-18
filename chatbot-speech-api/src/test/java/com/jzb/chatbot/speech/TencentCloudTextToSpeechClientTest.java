@@ -15,6 +15,22 @@ import org.junit.jupiter.api.Test;
 class TencentCloudTextToSpeechClientTest {
 
     @Test
+    void shouldUseNaturalLargeModelVoiceByDefault() {
+        var config = new TencentCloudTextToSpeechConfig(
+                "secret-id",
+                "secret-key",
+                null,
+                null,
+                null,
+                null,
+                0,
+                null
+        );
+
+        assertThat(config.voiceType()).isEqualTo("603004");
+    }
+
+    @Test
     void shouldCallTencentApiAndEncodePcmToOpusFrames() {
         var pcm = ByteBuffer.allocate(960 * Short.BYTES).order(ByteOrder.LITTLE_ENDIAN);
         for (var index = 0; index < 960; index++) {

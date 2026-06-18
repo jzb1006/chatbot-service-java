@@ -148,7 +148,7 @@ public class XiaozhiVoiceGatewayBeans {
             @Value("${chatbot.voice.tts.tencent.secret-key:}") String secretKey,
             @Value("${chatbot.voice.tts.tencent.region:ap-guangzhou}") String region,
             @Value("${chatbot.voice.tts.tencent.endpoint:tts.tencentcloudapi.com}") String endpoint,
-            @Value("${chatbot.voice.tts.tencent.voice-type:101001}") String voiceType,
+            @Value("${chatbot.voice.tts.tencent.voice-type:603004}") String voiceType,
             @Value("${chatbot.voice.tts.tencent.codec:pcm}") String codec,
             @Value("${chatbot.voice.tts.tencent.sample-rate:16000}") int sampleRate,
             @Value("${chatbot.voice.tts.tencent.timeout-seconds:15}") int timeoutSeconds

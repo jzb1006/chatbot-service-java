@@ -14,7 +14,9 @@ import ssl
 import struct
 import sys
 import time
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
@@ -37,10 +39,13 @@ class Frame:
 @dataclass
 class SmokeStats:
     hello_received: bool = False
+    uplink_frame_count: int = 0
     stt_count: int = 0
+    stt_text: str = ""
     llm_count: int = 0
     tts_start_count: int = 0
     tts_sentence_start_count: int = 0
+    tts_sentences: list[str] = field(default_factory=list)
     binary_frame_count: int = 0
     tts_stop_count: int = 0
     error_count: int = 0
@@ -49,10 +54,18 @@ class SmokeStats:
     def fields(self) -> list[tuple[str, str]]:
         return [
             ("hello_received", format_bool(self.hello_received)),
+            ("uplink_frame_count", str(self.uplink_frame_count)),
             ("stt_count", str(self.stt_count)),
+            ("stt_text", self.stt_text),
             ("llm_count", str(self.llm_count)),
             ("tts_start_count", str(self.tts_start_count)),
             ("tts_sentence_start_count", str(self.tts_sentence_start_count)),
+            ("tts_sentence_count", str(len(self.tts_sentences))),
+            ("tts_duplicate_sentence_count", str(len(duplicate_sentences(self.tts_sentences)))),
+            (
+                "tts_duplicate_sentences",
+                json.dumps(duplicate_sentences(self.tts_sentences), ensure_ascii=False, sort_keys=True),
+            ),
             ("binary_frame_count", str(self.binary_frame_count)),
             ("tts_stop_count", str(self.tts_stop_count)),
             ("error_count", str(self.error_count)),
@@ -248,6 +261,8 @@ def run_smoke_url(url: str, args: argparse.Namespace) -> SmokeStats:
         server_hello = recv_json_event(websocket, args.timeout)
         stats = SmokeStats(hello_received=server_hello.get("type") == "hello")
         require(stats.hello_received, f"{url}: missing server hello")
+        audio_frames = resolve_audio_frames(args)
+        stats.uplink_frame_count = len(audio_frames)
 
         websocket.send_text({
             "session_id": server_hello.get("session_id", args.client_id),
@@ -255,7 +270,10 @@ def run_smoke_url(url: str, args: argparse.Namespace) -> SmokeStats:
             "state": "start",
             "mode": "manual",
         })
-        websocket.send_binary(VALID_OPUS_SILENCE_FRAME)
+        for audio_frame in audio_frames:
+            websocket.send_binary(audio_frame)
+            if args.send_interval > 0:
+                time.sleep(args.send_interval)
         websocket.send_text({
             "session_id": server_hello.get("session_id", args.client_id),
             "type": "listen",
@@ -307,6 +325,9 @@ def collect_events_until_tts_stop(websocket: MinimalWebSocket, timeout: float, s
             stats.hello_received = True
         elif event_type == "stt":
             stats.stt_count += 1
+            text = event.get("text")
+            if isinstance(text, str) and text:
+                stats.stt_text = text
         elif event_type == "llm":
             stats.llm_count += 1
         elif event_type == "error":
@@ -318,6 +339,9 @@ def collect_events_until_tts_stop(websocket: MinimalWebSocket, timeout: float, s
                 stats.tts_start_count += 1
             elif state == "sentence_start":
                 stats.tts_sentence_start_count += 1
+                sentence = event.get("text")
+                if isinstance(sentence, str):
+                    stats.tts_sentences.append(sentence)
             elif state == "stop":
                 stats.tts_stop_count += 1
             if state == "stop":
@@ -328,6 +352,31 @@ def collect_events_until_tts_stop(websocket: MinimalWebSocket, timeout: float, s
 def print_smoke_stats(stats: SmokeStats) -> None:
     for name, value in stats.fields():
         print(f"{name}={value}")
+
+
+def duplicate_sentences(sentences: list[str]) -> dict[str, int]:
+    return {sentence: count for sentence, count in Counter(sentences).items() if count > 1}
+
+
+def resolve_audio_frames(args: argparse.Namespace) -> list[bytes]:
+    input_text = getattr(args, "input_text", "")
+    if input_text and input_text.strip():
+        return synthesize_input_text_to_opus_frames(input_text.strip())
+    return [VALID_OPUS_SILENCE_FRAME]
+
+
+def synthesize_input_text_to_opus_frames(text: str) -> list[bytes]:
+    tools_dir = Path(__file__).resolve().parents[1] / "tools" / "ws_debug_console"
+    sys.path.insert(0, str(tools_dir))
+    try:
+        from server import synthesize_text_to_opus_frames
+
+        return synthesize_text_to_opus_frames(text)
+    finally:
+        try:
+            sys.path.remove(str(tools_dir))
+        except ValueError:
+            pass
 
 
 def format_bool(value: bool) -> str:
@@ -384,6 +433,8 @@ def parse_args(argv: Iterable[str], description: str = "小智 WebSocket smoke �
     parser.add_argument("--client-id", default="smoke-client-1", help="Client-Id 请求头")
     parser.add_argument("--protocol-version", type=int, default=1, help="Protocol-Version 请求头和 hello version")
     parser.add_argument("--timeout", type=float, default=10.0, help="单次连接超时时间，单位秒")
+    parser.add_argument("--input-text", default="", help="将指定文本合成为 Opus 帧后作为硬件录音上行")
+    parser.add_argument("--send-interval", type=float, default=0.02, help="每帧上行发送间隔，单位秒")
     return parser.parse_args(list(argv))
 
 
