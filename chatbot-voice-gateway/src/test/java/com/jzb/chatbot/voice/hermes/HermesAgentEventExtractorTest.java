@@ -19,7 +19,33 @@ class HermesAgentEventExtractorTest {
                 "create_reminder",
                 "喝水",
                 60L,
-                "1分钟后提醒你喝水"
+                "1分钟后提醒你喝水",
+                null,
+                null,
+                null,
+                0L
+        ));
+    }
+
+    @Test
+    void shouldExtractMusicPlayEventFromHermesSse() {
+        var extractor = new HermesAgentEventExtractor();
+
+        var events = extractor.accept("""
+                event: xiaozhi.agent_event
+                data: {"action":"music_play","title":"稻香","artist":"周杰伦","media_url":"https://example.com/daoxiang.mp3","confirmation_text":"开始播放稻香"}
+
+                """);
+
+        assertThat(events).containsExactly(new HermesAgentEvent(
+                "music_play",
+                null,
+                0L,
+                "开始播放稻香",
+                "https://example.com/daoxiang.mp3",
+                "稻香",
+                "周杰伦",
+                0L
         ));
     }
 
@@ -45,7 +71,11 @@ class HermesAgentEventExtractorTest {
                 "create_reminder",
                 "喝水",
                 60L,
-                "1分钟后提醒你喝水"
+                "1分钟后提醒你喝水",
+                null,
+                null,
+                null,
+                0L
         ));
     }
 }

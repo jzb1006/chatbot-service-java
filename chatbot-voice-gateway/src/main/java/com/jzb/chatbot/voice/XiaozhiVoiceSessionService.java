@@ -11,6 +11,8 @@ import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
 import com.jzb.chatbot.voice.hermes.HermesAgentEvent;
 import com.jzb.chatbot.voice.hermes.HermesAgentEventExtractor;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
+import com.jzb.chatbot.voice.music.XiaozhiMusicActionHandler;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRuntime;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientHello;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
@@ -33,6 +35,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.ApplicationEventPublisherAware;
 import org.springframework.stereotype.Service;
@@ -69,6 +73,8 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     private final StreamingSpeechToTextClient streamingSpeechToTextClient;
     private final XiaozhiAudioParams audioParams;
     private final XiaozhiVoiceProfileResolver voiceProfileResolver;
+    private final XiaozhiMusicActionHandler musicActionHandler;
+    private final XiaozhiMusicPlaybackRuntime musicPlaybackRuntime;
     private final Map<String, XiaozhiVoiceSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> webSocketSessions = new ConcurrentHashMap<>();
     private final Map<String, String> deviceSessionIds = new ConcurrentHashMap<>();
@@ -89,6 +95,102 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             XiaozhiAudioParams audioParams,
             XiaozhiVoiceProfileResolver voiceProfileResolver
     ) {
+        this(codec,
+                speechToTextClient,
+                hermesClient,
+                ttsRuntime,
+                eventFactory,
+                hermesClientConfig,
+                tokenAuth,
+                mcpBridge,
+                asrMode,
+                streamingSpeechToTextClient,
+                audioParams,
+                voiceProfileResolver,
+                (XiaozhiMusicActionHandler) null,
+                (XiaozhiMusicPlaybackRuntime) null);
+    }
+
+    @Autowired
+    public XiaozhiVoiceSessionService(
+            XiaozhiMessageCodec codec,
+            SpeechToTextClient speechToTextClient,
+            HermesClient hermesClient,
+            XiaozhiTtsRuntime ttsRuntime,
+            XiaozhiServerEventFactory eventFactory,
+            HermesClientConfig hermesClientConfig,
+            XiaozhiVoiceTokenAuth tokenAuth,
+            XiaozhiMcpBridge mcpBridge,
+            XiaozhiAsrMode asrMode,
+            StreamingSpeechToTextClient streamingSpeechToTextClient,
+            XiaozhiAudioParams audioParams,
+            XiaozhiVoiceProfileResolver voiceProfileResolver,
+            ObjectProvider<XiaozhiMusicActionHandler> musicActionHandler,
+            ObjectProvider<XiaozhiMusicPlaybackRuntime> musicPlaybackRuntime
+    ) {
+        this(codec,
+                speechToTextClient,
+                hermesClient,
+                ttsRuntime,
+                eventFactory,
+                hermesClientConfig,
+                tokenAuth,
+                mcpBridge,
+                asrMode,
+                streamingSpeechToTextClient,
+                audioParams,
+                voiceProfileResolver,
+                musicActionHandler.getIfAvailable(),
+                musicPlaybackRuntime.getIfAvailable());
+    }
+
+    public XiaozhiVoiceSessionService(
+            XiaozhiMessageCodec codec,
+            SpeechToTextClient speechToTextClient,
+            HermesClient hermesClient,
+            XiaozhiTtsRuntime ttsRuntime,
+            XiaozhiServerEventFactory eventFactory,
+            HermesClientConfig hermesClientConfig,
+            XiaozhiVoiceTokenAuth tokenAuth,
+            XiaozhiMcpBridge mcpBridge,
+            XiaozhiAsrMode asrMode,
+            StreamingSpeechToTextClient streamingSpeechToTextClient,
+            XiaozhiAudioParams audioParams,
+            XiaozhiVoiceProfileResolver voiceProfileResolver,
+            XiaozhiMusicActionHandler musicActionHandler
+    ) {
+        this(codec,
+                speechToTextClient,
+                hermesClient,
+                ttsRuntime,
+                eventFactory,
+                hermesClientConfig,
+                tokenAuth,
+                mcpBridge,
+                asrMode,
+                streamingSpeechToTextClient,
+                audioParams,
+                voiceProfileResolver,
+                musicActionHandler,
+                null);
+    }
+
+    public XiaozhiVoiceSessionService(
+            XiaozhiMessageCodec codec,
+            SpeechToTextClient speechToTextClient,
+            HermesClient hermesClient,
+            XiaozhiTtsRuntime ttsRuntime,
+            XiaozhiServerEventFactory eventFactory,
+            HermesClientConfig hermesClientConfig,
+            XiaozhiVoiceTokenAuth tokenAuth,
+            XiaozhiMcpBridge mcpBridge,
+            XiaozhiAsrMode asrMode,
+            StreamingSpeechToTextClient streamingSpeechToTextClient,
+            XiaozhiAudioParams audioParams,
+            XiaozhiVoiceProfileResolver voiceProfileResolver,
+            XiaozhiMusicActionHandler musicActionHandler,
+            XiaozhiMusicPlaybackRuntime musicPlaybackRuntime
+    ) {
         this.codec = codec;
         this.speechToTextClient = speechToTextClient;
         this.hermesClient = hermesClient;
@@ -101,6 +203,8 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         this.streamingSpeechToTextClient = streamingSpeechToTextClient;
         this.audioParams = audioParams;
         this.voiceProfileResolver = voiceProfileResolver;
+        this.musicActionHandler = musicActionHandler;
+        this.musicPlaybackRuntime = musicPlaybackRuntime;
     }
 
     @Override
@@ -160,6 +264,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         var voiceSession = sessions.remove(session.getId());
         webSocketSessions.remove(session.getId());
         if (voiceSession != null) {
+            stopMusic(voiceSession);
             cancelCurrentTurnPlayback(voiceSession);
             voiceSession.terminateAsrStream();
             deviceSessionIds.computeIfPresent(voiceSession.deviceId(), (key, currentSessionId) ->
@@ -208,6 +313,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             return;
         }
         if ("session".equals(message.type()) && "new".equals(message.state())) {
+            stopMusic(voiceSession);
             cancelCurrentTurnPlayback(voiceSession);
             var conversationId = voiceSession.startNewConversation();
             sendText(webSocketSession, eventFactory.session(voiceSession.sessionId(), conversationId));
@@ -216,6 +322,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             return;
         }
         if ("session".equals(message.type()) && "clear".equals(message.state())) {
+            stopMusic(voiceSession);
             cancelCurrentTurnPlayback(voiceSession);
             var conversationId = voiceSession.clearConversation();
             sendText(webSocketSession, eventFactory.session(voiceSession.sessionId(), conversationId));
@@ -224,6 +331,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             return;
         }
         if ("abort".equals(message.type())) {
+            stopMusic(voiceSession);
             cancelCurrentTurnPlayback(voiceSession);
             voiceSession.terminateAsrStream();
             voiceSession.markIdle();
@@ -243,6 +351,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             XiaozhiClientMessage message,
             XiaozhiVoiceSession voiceSession
     ) {
+        stopMusic(voiceSession);
         cancelCurrentTurnPlayback(voiceSession);
         if (asrMode.streaming()) {
             var asrTurn = voiceSession.startAsrStream(audioParams.sampleRate());
@@ -623,8 +732,8 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
                     }
                     for (var event : eventExtractor.accept(chunk)) {
-                        var confirmationText = handleHermesAgentEvent(voiceSession, turnGuard, event);
-                        if (reminderConfirmationText == null && confirmationText != null && !confirmationText.isBlank()) {
+                        var confirmationText = handleHermesAgentEvent(webSocketSession, voiceSession, turnGuard, event);
+                        if (!musicEvent(event) && reminderConfirmationText == null && confirmationText != null && !confirmationText.isBlank()) {
                             reminderConfirmationText = confirmationText;
                         }
                     }
@@ -785,6 +894,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             for (var chunk : (Iterable<String>) chunks::iterator) {
                 ensureTurnActive(webSocketSession, voiceSession, turnGeneration, turnGuard);
                 reminderConfirmationText = acceptHermesChunk(
+                        webSocketSession,
                         voiceSession,
                         turnGuard,
                         chunk,
@@ -827,6 +937,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     }
 
     private String acceptHermesChunk(
+            WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
             TurnGuard turnGuard,
             String chunk,
@@ -839,8 +950,8 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     ) {
         var confirmation = reminderConfirmationText;
         for (var event : eventExtractor.accept(chunk)) {
-            var confirmationText = handleHermesAgentEvent(voiceSession, turnGuard, event);
-            if (confirmation == null && confirmationText != null && !confirmationText.isBlank()) {
+            var confirmationText = handleHermesAgentEvent(webSocketSession, voiceSession, turnGuard, event);
+            if (!musicEvent(event) && confirmation == null && confirmationText != null && !confirmationText.isBlank()) {
                 confirmation = confirmationText;
             }
         }
@@ -900,11 +1011,18 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     }
 
     private String handleHermesAgentEvent(
+            WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
             TurnGuard turnGuard,
             HermesAgentEvent event
     ) {
-        if (!turnGuard.active() || !"create_reminder".equals(event.action())) {
+        if (!turnGuard.active()) {
+            return null;
+        }
+        if (musicActionHandler != null && musicActionHandler.handle(webSocketSession, voiceSession, event)) {
+            return event.confirmationText();
+        }
+        if (!"create_reminder".equals(event.action())) {
             return null;
         }
         var reminderIntent = new XiaozhiReminderIntent(
@@ -916,6 +1034,10 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         return turnGuard.active() ? reminderIntent.confirmationText() : null;
     }
 
+    private boolean musicEvent(HermesAgentEvent event) {
+        return event != null && event.action() != null && event.action().startsWith("music_");
+    }
+
     private void publishReminderRequest(
             XiaozhiVoiceSession voiceSession,
             XiaozhiReminderIntent reminderIntent
@@ -925,6 +1047,12 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                 reminderIntent.message(),
                 reminderIntent.delaySeconds()
         ));
+    }
+
+    private void stopMusic(XiaozhiVoiceSession voiceSession) {
+        if (musicPlaybackRuntime != null && voiceSession != null) {
+            musicPlaybackRuntime.stop(voiceSession.deviceId());
+        }
     }
 
     private PlaybackResult speakWithRuntime(

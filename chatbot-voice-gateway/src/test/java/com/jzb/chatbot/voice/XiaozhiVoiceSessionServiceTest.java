@@ -26,6 +26,9 @@ import com.jzb.chatbot.speech.StreamingTextToSpeechSession;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.speech.TextToSpeechOptions;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
+import com.jzb.chatbot.voice.music.XiaozhiMusicActionHandler;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRequest;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRuntime;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientHello;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
@@ -361,6 +364,37 @@ class XiaozhiVoiceSessionServiceTest {
                 .extracting(message -> message.getPayload().toString())
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "\"text\":\"第一句内容很完整。\""))
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "\"text\":\"第二句内容也完整。\""));
+    }
+
+    @Test
+    void shouldHandleMusicPlayFromHermesAgentEventWithoutTtsSynthesis() {
+        var hermesClient = new StaticSseHermesClient("""
+                event: xiaozhi.agent_event
+                data: {"action":"music_play","title":"稻香","artist":"周杰伦","media_url":"https://example.com/daoxiang.mp3","confirmation_text":"开始播放稻香"}
+
+                """);
+        var ttsClient = new RecordingTextToSpeechClient();
+        var musicRuntime = new CapturingMusicPlaybackRuntime();
+        var serviceWithMusic = newServiceWithMusic(hermesClient, ttsClient, musicRuntime);
+        var session = openSession(serviceWithMusic);
+
+        runSingleTurn(serviceWithMusic, session);
+
+        assertThat(ttsClient.texts()).isEmpty();
+        assertThat(musicRuntime.playedTitles()).containsExactly("稻香");
+    }
+
+    @Test
+    void shouldStopMusicWhenUserStartsListening() {
+        var musicRuntime = new CapturingMusicPlaybackRuntime();
+        var serviceWithMusic = newServiceWithMusic(new FakeHermesClient(), new FakeTextToSpeechClient(), musicRuntime);
+        var session = openSession(serviceWithMusic);
+
+        serviceWithMusic.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
+        ));
+
+        assertThat(musicRuntime.events()).contains("stop:ws-session-1");
     }
 
     @Test
@@ -1891,6 +1925,30 @@ class XiaozhiVoiceSessionServiceTest {
         );
     }
 
+    private XiaozhiVoiceSessionService newServiceWithMusic(
+            HermesClient hermesClient,
+            TextToSpeechClient textToSpeechClient,
+            XiaozhiMusicPlaybackRuntime musicRuntime
+    ) {
+        var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
+        return new XiaozhiVoiceSessionService(
+                codec,
+                new FakeSpeechToTextClient(),
+                hermesClient,
+                new XiaozhiTtsRuntime(textToSpeechClient, codec, eventFactory),
+                eventFactory,
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge(),
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient(),
+                XiaozhiAudioParams.defaults(),
+                new XiaozhiVoiceProfileResolver(new VoiceId("default"), 1.0, 1.0),
+                new XiaozhiMusicActionHandler(musicRuntime),
+                musicRuntime
+        );
+    }
+
     private XiaozhiVoiceSessionService newService(
             SpeechToTextClient speechToTextClient,
             HermesClient hermesClient,
@@ -2068,6 +2126,25 @@ class XiaozhiVoiceSessionServiceTest {
 
         private List<String> conversationIds() {
             return List.copyOf(conversationIds);
+        }
+    }
+
+    private static class StaticSseHermesClient implements HermesClient {
+
+        private final String chunk;
+
+        private StaticSseHermesClient(String chunk) {
+            this.chunk = chunk;
+        }
+
+        @Override
+        public HermesResponse chat(HermesRequest request, HermesClientConfig config) {
+            return new HermesResponse(request.conversationId(), "");
+        }
+
+        @Override
+        public Stream<String> streamChat(HermesRequest request, HermesClientConfig config) {
+            return Stream.of(chunk);
         }
     }
 
@@ -2530,6 +2607,40 @@ class XiaozhiVoiceSessionServiceTest {
 
         private List<String> texts() {
             return List.copyOf(texts);
+        }
+    }
+
+    private static class CapturingMusicPlaybackRuntime extends XiaozhiMusicPlaybackRuntime {
+
+        private final java.util.ArrayList<String> playedTitles = new java.util.ArrayList<>();
+        private final java.util.ArrayList<String> events = new java.util.ArrayList<>();
+
+        private CapturingMusicPlaybackRuntime() {
+            super(null, null, null, new com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackProperties(
+                    true,
+                    "ffmpeg",
+                    Duration.ofSeconds(3),
+                    Duration.ofMinutes(5),
+                    java.util.Set.of("example.com")
+            ));
+        }
+
+        @Override
+        public void play(XiaozhiMusicPlaybackRequest request) {
+            playedTitles.add(request.title());
+        }
+
+        @Override
+        public void stop(String deviceId) {
+            events.add("stop:" + deviceId);
+        }
+
+        private List<String> playedTitles() {
+            return List.copyOf(playedTitles);
+        }
+
+        private List<String> events() {
+            return List.copyOf(events);
         }
     }
 

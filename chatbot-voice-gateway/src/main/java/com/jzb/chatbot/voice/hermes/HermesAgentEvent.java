@@ -12,6 +12,10 @@ public record HermesAgentEvent(
         String action,
         String message,
         long delaySeconds,
-        String confirmationText
+        String confirmationText,
+        String mediaUrl,
+        String title,
+        String artist,
+        long positionSeconds
 ) {
 }

@@ -40,6 +40,12 @@ chatbot:
       sample-rate: ${CHATBOT_VOICE_AUDIO_SAMPLE_RATE:16000}
       channels: ${CHATBOT_VOICE_AUDIO_CHANNELS:1}
       frame-duration: ${CHATBOT_VOICE_AUDIO_FRAME_DURATION:60}
+    music:
+      enabled: ${CHATBOT_VOICE_MUSIC_ENABLED:false}
+      ffmpeg-path: ${CHATBOT_VOICE_MUSIC_FFMPEG_PATH:ffmpeg}
+      connect-timeout: ${CHATBOT_VOICE_MUSIC_CONNECT_TIMEOUT:3s}
+      max-duration: ${CHATBOT_VOICE_MUSIC_MAX_DURATION:5m}
+      allowed-hosts: ${CHATBOT_VOICE_MUSIC_ALLOWED_HOSTS:}
     asr:
       mode: ${CHATBOT_VOICE_ASR_MODE:sentence}
       provider: ${CHATBOT_VOICE_ASR_PROVIDER:fake}

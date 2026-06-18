@@ -12,6 +12,8 @@ import com.jzb.chatbot.speech.StreamingTextToSpeechListener;
 import com.jzb.chatbot.speech.StreamingTextToSpeechSession;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.speech.TextToSpeechOptions;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackCoordinator;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackState;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
 import com.jzb.chatbot.voice.tts.XiaozhiStreamingTtsRequest;
@@ -114,6 +116,31 @@ class XiaozhiTtsRuntimeTest {
 
         assertThat(ttsClient.texts()).containsExactly("第一句内容。", "第二句内容。");
         assertThat(sentenceStartTexts(session)).containsExactly("第一句内容。", "第二句内容。");
+    }
+
+    @Test
+    void shouldPauseMusicDuringTtsAndResumeAfterTts() {
+        var musicCoordinator = new CapturingMusicPlaybackCoordinator();
+        var runtime = new XiaozhiTtsRuntime(
+                new FakeTextToSpeechClient(),
+                new XiaozhiMessageCodec(OBJECT_MAPPER),
+                new XiaozhiServerEventFactory(OBJECT_MAPPER),
+                musicCoordinator
+        );
+        var session = openSession();
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        runtime.speak(new XiaozhiTtsRequest(
+                session,
+                voiceSession,
+                List.of("你好。"),
+                TextToSpeechOptions.defaults()
+        ));
+
+        assertThat(musicCoordinator.events()).containsExactly(
+                "pause:ws-session-1:TTS",
+                "resume:ws-session-1:TTS"
+        );
     }
 
     @Test
@@ -612,6 +639,25 @@ class XiaozhiTtsRuntimeTest {
         @Override
         public List<ByteBuffer> synthesize(String text, VoiceId voiceId) {
             return List.of(ByteBuffer.wrap(new byte[] {1, 2, 3}));
+        }
+    }
+
+    private static class CapturingMusicPlaybackCoordinator implements XiaozhiMusicPlaybackCoordinator {
+
+        private final List<String> events = new ArrayList<>();
+
+        @Override
+        public void pause(String deviceId, XiaozhiMusicPlaybackState.PauseSource source) {
+            events.add("pause:" + deviceId + ":" + source);
+        }
+
+        @Override
+        public void resume(String deviceId, XiaozhiMusicPlaybackState.PauseSource source) {
+            events.add("resume:" + deviceId + ":" + source);
+        }
+
+        private List<String> events() {
+            return List.copyOf(events);
         }
     }
 

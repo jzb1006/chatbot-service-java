@@ -15,6 +15,10 @@ RUN mvn -B -pl chatbot-bootstrap -am -DskipTests package
 
 FROM eclipse-temurin:21-jre
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY --from=build /workspace/chatbot-bootstrap/target/chatbot-bootstrap-0.0.1-SNAPSHOT.jar /app/chatbot-service.jar
 EXPOSE 8766

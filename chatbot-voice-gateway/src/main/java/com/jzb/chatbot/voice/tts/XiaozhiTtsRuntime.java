@@ -5,6 +5,8 @@ import com.jzb.chatbot.speech.StreamingTextToSpeechListener;
 import com.jzb.chatbot.speech.StreamingTextToSpeechSession;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.voice.XiaozhiTtsPlayback;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackCoordinator;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackState;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
 import java.io.IOException;
@@ -43,6 +45,7 @@ public class XiaozhiTtsRuntime {
     private final StreamingTextToSpeechClient streamingTextToSpeechClient;
     private final XiaozhiMessageCodec codec;
     private final XiaozhiServerEventFactory eventFactory;
+    private final XiaozhiMusicPlaybackCoordinator musicPlaybackCoordinator;
     private final Map<String, XiaozhiTtsPlayback> activePlaybacks = new ConcurrentHashMap<>();
     private final Map<String, StreamingTextToSpeechSession> activeStreamingSessions = new ConcurrentHashMap<>();
 
@@ -51,7 +54,16 @@ public class XiaozhiTtsRuntime {
             XiaozhiMessageCodec codec,
             XiaozhiServerEventFactory eventFactory
     ) {
-        this(textToSpeechClient, null, codec, eventFactory);
+        this(textToSpeechClient, null, codec, eventFactory, null);
+    }
+
+    public XiaozhiTtsRuntime(
+            TextToSpeechClient textToSpeechClient,
+            XiaozhiMessageCodec codec,
+            XiaozhiServerEventFactory eventFactory,
+            XiaozhiMusicPlaybackCoordinator musicPlaybackCoordinator
+    ) {
+        this(textToSpeechClient, null, codec, eventFactory, musicPlaybackCoordinator);
     }
 
     public XiaozhiTtsRuntime(
@@ -60,10 +72,21 @@ public class XiaozhiTtsRuntime {
             XiaozhiMessageCodec codec,
             XiaozhiServerEventFactory eventFactory
     ) {
+        this(textToSpeechClient, streamingTextToSpeechClient, codec, eventFactory, null);
+    }
+
+    public XiaozhiTtsRuntime(
+            TextToSpeechClient textToSpeechClient,
+            StreamingTextToSpeechClient streamingTextToSpeechClient,
+            XiaozhiMessageCodec codec,
+            XiaozhiServerEventFactory eventFactory,
+            XiaozhiMusicPlaybackCoordinator musicPlaybackCoordinator
+    ) {
         this.textToSpeechClient = textToSpeechClient;
         this.streamingTextToSpeechClient = streamingTextToSpeechClient;
         this.codec = codec;
         this.eventFactory = eventFactory;
+        this.musicPlaybackCoordinator = musicPlaybackCoordinator;
     }
 
     /**
@@ -102,6 +125,7 @@ public class XiaozhiTtsRuntime {
                 sendText(request, eventFactory.llmEmotion(sessionId, DEFAULT_EMOTION));
             }
             if (!cancelled(request, playback)) {
+                pauseMusicForTts(voiceSession.deviceId());
                 sendText(request, eventFactory.ttsStart(sessionId));
                 for (var sentence : request.sentences()) {
                     if (sentence == null || sentence.isBlank()) {
@@ -122,6 +146,7 @@ public class XiaozhiTtsRuntime {
         } finally {
             try {
                 sendStopOnce(request, playback, naturalPlaybackFinished);
+                resumeMusicAfterTts(voiceSession.deviceId());
                 result = result(playback);
             } finally {
                 activePlaybacks.remove(sessionId, playback);
@@ -171,6 +196,7 @@ public class XiaozhiTtsRuntime {
                 sendText(webSocketSession, eventFactory.llmEmotion(sessionId, DEFAULT_EMOTION));
             }
             if (!cancelled(request.cancellationRequested(), playback)) {
+                pauseMusicForTts(voiceSession.deviceId());
                 sendText(webSocketSession, eventFactory.ttsStart(sessionId));
                 var sink = new RuntimeSentenceSink(
                         request,
@@ -208,6 +234,7 @@ public class XiaozhiTtsRuntime {
                         playback,
                         naturalPlaybackFinished
                 );
+                resumeMusicAfterTts(voiceSession.deviceId());
                 result = result(playback);
             } finally {
                 if (streamingSession != null) {
@@ -326,6 +353,18 @@ public class XiaozhiTtsRuntime {
 
     private void sendText(WebSocketSession webSocketSession, String payload) throws IOException {
         webSocketSession.sendMessage(new TextMessage(payload));
+    }
+
+    private void pauseMusicForTts(String deviceId) {
+        if (musicPlaybackCoordinator != null) {
+            musicPlaybackCoordinator.pause(deviceId, XiaozhiMusicPlaybackState.PauseSource.TTS);
+        }
+    }
+
+    private void resumeMusicAfterTts(String deviceId) {
+        if (musicPlaybackCoordinator != null) {
+            musicPlaybackCoordinator.resume(deviceId, XiaozhiMusicPlaybackState.PauseSource.TTS);
+        }
     }
 
     private XiaozhiTtsRequest collectSynchronousFallbackRequest(

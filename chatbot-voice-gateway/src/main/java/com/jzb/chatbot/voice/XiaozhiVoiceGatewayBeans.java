@@ -21,6 +21,14 @@ import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextConfig;
 import com.jzb.chatbot.speech.TencentStreamingTextToSpeechConfig;
 import com.jzb.chatbot.speech.TencentStreamingTtsSigner;
 import com.jzb.chatbot.speech.TextToSpeechClient;
+import com.jzb.chatbot.voice.music.FfmpegMusicDecoder;
+import com.jzb.chatbot.voice.music.MusicAudioSource;
+import com.jzb.chatbot.voice.music.MusicFrameSender;
+import com.jzb.chatbot.voice.music.MusicHostResolver;
+import com.jzb.chatbot.voice.music.XiaozhiMusicActionHandler;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackCoordinator;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackProperties;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRuntime;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpAdminAuth;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
@@ -31,9 +39,16 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 
 /**
  * 小智语音网关 Bean 配置。
@@ -213,9 +228,81 @@ public class XiaozhiVoiceGatewayBeans {
             TextToSpeechClient textToSpeechClient,
             StreamingTextToSpeechClient streamingTextToSpeechClient,
             XiaozhiMessageCodec codec,
-            XiaozhiServerEventFactory eventFactory
+            XiaozhiServerEventFactory eventFactory,
+            ObjectProvider<XiaozhiMusicPlaybackCoordinator> musicPlaybackCoordinator
     ) {
-        return new XiaozhiTtsRuntime(textToSpeechClient, streamingTextToSpeechClient, codec, eventFactory);
+        return new XiaozhiTtsRuntime(
+                textToSpeechClient,
+                streamingTextToSpeechClient,
+                codec,
+                eventFactory,
+                musicPlaybackCoordinator.getIfAvailable()
+        );
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "chatbot.voice.music.enabled", havingValue = "true")
+    XiaozhiMusicPlaybackProperties xiaozhiMusicPlaybackProperties(Environment environment) {
+        var binder = Binder.get(environment);
+        var allowedHosts = binder
+                .bind("chatbot.voice.music.allowed-hosts", Bindable.listOf(String.class))
+                .orElseGet(java.util.List::of)
+                .stream()
+                .flatMap(value -> Arrays.stream(value.split(",")))
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+        return new XiaozhiMusicPlaybackProperties(
+                binder.bind("chatbot.voice.music.enabled", Boolean.class).orElse(false),
+                binder.bind("chatbot.voice.music.ffmpeg-path", String.class).orElse("ffmpeg"),
+                binder.bind("chatbot.voice.music.connect-timeout", Duration.class).orElse(Duration.ofSeconds(3)),
+                binder.bind("chatbot.voice.music.max-duration", Duration.class).orElse(Duration.ofMinutes(5)),
+                Set.copyOf(allowedHosts)
+        );
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "chatbot.voice.music.enabled", havingValue = "true")
+    MusicHostResolver musicHostResolver() {
+        return MusicHostResolver.system();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "chatbot.voice.music.enabled", havingValue = "true")
+    MusicAudioSource musicAudioSource(
+            XiaozhiMusicPlaybackProperties properties,
+            MusicHostResolver musicHostResolver
+    ) {
+        return new MusicAudioSource(properties, musicHostResolver);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "chatbot.voice.music.enabled", havingValue = "true")
+    FfmpegMusicDecoder ffmpegMusicDecoder(XiaozhiMusicPlaybackProperties properties) {
+        return new FfmpegMusicDecoder(properties.ffmpegPath());
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "chatbot.voice.music.enabled", havingValue = "true")
+    MusicFrameSender musicFrameSender(XiaozhiMessageCodec codec) {
+        return new MusicFrameSender(codec);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "chatbot.voice.music.enabled", havingValue = "true")
+    XiaozhiMusicPlaybackRuntime xiaozhiMusicPlaybackRuntime(
+            MusicAudioSource audioSource,
+            FfmpegMusicDecoder decoder,
+            MusicFrameSender frameSender,
+            XiaozhiMusicPlaybackProperties properties
+    ) {
+        return new XiaozhiMusicPlaybackRuntime(audioSource, decoder, frameSender, properties);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "chatbot.voice.music.enabled", havingValue = "true")
+    XiaozhiMusicActionHandler xiaozhiMusicActionHandler(XiaozhiMusicPlaybackRuntime musicPlaybackRuntime) {
+        return new XiaozhiMusicActionHandler(musicPlaybackRuntime);
     }
 
     @Bean

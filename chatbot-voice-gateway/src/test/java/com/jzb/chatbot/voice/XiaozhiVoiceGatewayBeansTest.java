@@ -17,6 +17,8 @@ import com.jzb.chatbot.speech.TencentCloudStreamingTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextClient;
 import com.jzb.chatbot.speech.TextToSpeechClient;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackProperties;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRuntime;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpAdminAuth;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
@@ -25,6 +27,7 @@ import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime;
 import com.jzb.chatbot.voice.tts.XiaozhiVoiceProfileResolver;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -93,6 +96,32 @@ class XiaozhiVoiceGatewayBeansTest {
     @Test
     void shouldCreateXiaozhiTtsRuntimeWithLightweightContext() {
         contextRunner.run(context -> assertThat(context.getBean(XiaozhiTtsRuntime.class)).isNotNull());
+    }
+
+    @Test
+    void shouldDisableMusicPlaybackByDefault() {
+        contextRunner.run(context -> assertThat(context).doesNotHaveBean(XiaozhiMusicPlaybackRuntime.class));
+    }
+
+    @Test
+    void shouldCreateMusicPlaybackRuntimeWhenEnabled() {
+        contextRunner
+                .withPropertyValues(
+                        "chatbot.voice.music.enabled=true",
+                        "chatbot.voice.music.ffmpeg-path=ffmpeg",
+                        "chatbot.voice.music.connect-timeout=3s",
+                        "chatbot.voice.music.max-duration=5m",
+                        "chatbot.voice.music.allowed-hosts=example.com,cdn.example.com"
+                )
+                .run(context -> {
+                    assertThat(context).hasSingleBean(XiaozhiMusicPlaybackRuntime.class);
+
+                    var properties = context.getBean(XiaozhiMusicPlaybackProperties.class);
+
+                    assertThat(properties.connectTimeout()).isEqualTo(Duration.ofSeconds(3));
+                    assertThat(properties.maxDuration()).isEqualTo(Duration.ofMinutes(5));
+                    assertThat(properties.allowedHosts()).containsExactlyInAnyOrder("example.com", "cdn.example.com");
+                });
     }
 
     @Test
