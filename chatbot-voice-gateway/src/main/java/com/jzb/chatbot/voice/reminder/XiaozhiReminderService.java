@@ -91,7 +91,10 @@ public class XiaozhiReminderService {
         if (!notified) {
             log.warn("xiaozhi reminder skipped because device is offline, reminderId={}, deviceId={}",
                     reminder.id(), reminder.deviceId());
+            return;
         }
+        log.info("xiaozhi reminder delivered, reminderId={}, deviceId={}, message={}",
+                reminder.id(), reminder.deviceId(), reminder.message());
     }
 
     private Instant parseRemindAt(String remindAt) {

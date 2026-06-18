@@ -62,4 +62,14 @@ class XiaozhiReminderServiceTest {
         assertThat(intent.delaySeconds()).isEqualTo(60L);
         assertThat(intent.confirmationText()).isEqualTo("一分钟后提醒你喝水");
     }
+
+    @Test
+    void shouldParsePushStyleReminderIntent() {
+        var intent = XiaozhiReminderIntent.parse("一分钟后，给我推送服务器的运行情况。");
+
+        assertThat(intent).isNotNull();
+        assertThat(intent.message()).isEqualTo("服务器的运行情况");
+        assertThat(intent.delaySeconds()).isEqualTo(60L);
+        assertThat(intent.confirmationText()).isEqualTo("一分钟后提醒你服务器的运行情况");
+    }
 }

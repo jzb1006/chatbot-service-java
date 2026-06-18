@@ -16,7 +16,8 @@ public record XiaozhiReminderIntent(String message, long delaySeconds, String co
     private static final Pattern RELATIVE_REMINDER = Pattern.compile(
             "(?:一个|1个)?\\s*(\\d+|一|两|二|三|四|五|六|七|八|九|十)\\s*"
                     + "(秒|分钟钟|分钟|分|小时|钟头)\\s*(?:后|后的)?\\s*"
-                    + "(?:定时任务|提醒|闹钟|任务)?\\s*(?:提醒我|叫我)(.+)"
+                    + "(?:定时任务|提醒|闹钟|任务)?\\s*"
+                    + "(?:提醒我|叫我|给我(?:推送|通知|发送|播报|提醒|告诉)|推送给我|通知我|发送给我|播报给我|告诉我)(.+)"
     );
 
     /**
