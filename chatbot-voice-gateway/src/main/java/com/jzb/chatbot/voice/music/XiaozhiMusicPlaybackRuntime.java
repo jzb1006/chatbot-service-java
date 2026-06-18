@@ -1,6 +1,7 @@
 package com.jzb.chatbot.voice.music;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -39,13 +40,23 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
     }
 
     public void play(XiaozhiMusicPlaybackRequest request) {
+        play(request, null);
+    }
+
+    public void playPausedForTts(XiaozhiMusicPlaybackRequest request) {
+        play(request, XiaozhiMusicPlaybackState.PauseSource.TTS);
+    }
+
+    private void play(XiaozhiMusicPlaybackRequest request, XiaozhiMusicPlaybackState.PauseSource initialPauseSource) {
         if (!properties.enabled()) {
             return;
         }
         var deviceId = request.voiceSession().deviceId();
         stop(deviceId);
-        var task = new PlaybackTask(request);
+        var task = new PlaybackTask(request, initialPauseSource);
         tasks.put(deviceId, task);
+        log.info("xiaozhi music playback requested, deviceId={}, title={}, artist={}, mediaHost={}, initialPauseSource={}",
+                deviceId, request.title(), request.artist(), mediaHost(request.mediaUrl()), initialPauseSource);
         Thread.ofVirtual().name("xiaozhi-music-" + deviceId).start(() -> run(deviceId, task));
     }
 
@@ -55,6 +66,7 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
         if (task != null) {
             task.pause(source);
             task.awaitIdle(PAUSE_IDLE_TIMEOUT_MS);
+            log.info("xiaozhi music playback paused, deviceId={}, source={}", deviceId, source);
         }
     }
 
@@ -63,6 +75,8 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
         var task = tasks.get(deviceId);
         if (task != null) {
             task.resume(source);
+            log.info("xiaozhi music playback resumed, deviceId={}, source={}, status={}",
+                    deviceId, source, task.state().status());
         }
     }
 
@@ -85,7 +99,7 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
             var deadline = System.nanoTime() + properties.maxDuration().toNanos();
             try (var opened = audioSource.open(task.request.mediaUrl());
                     var decoded = decoder.decode(opened.inputStream())) {
-                frameSender.send(
+                var sentFrames = frameSender.send(
                         task.request.webSocketSession(),
                         task.request.voiceSession(),
                         decoded.pcmStream(),
@@ -94,12 +108,26 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
                         task::markSending,
                         task::markIdle
                 );
+                log.info("xiaozhi music playback finished, deviceId={}, title={}, sentFrames={}",
+                        deviceId, task.request.title(), sentFrames);
             }
         } catch (IOException | RuntimeException exception) {
             log.warn("xiaozhi music playback failed, deviceId={}, title={}, message={}",
                     deviceId, task.request.title(), exception.getMessage(), exception);
         } finally {
             tasks.remove(deviceId, task);
+        }
+    }
+
+    private String mediaHost(String mediaUrl) {
+        if (mediaUrl == null || mediaUrl.isBlank()) {
+            return "";
+        }
+        try {
+            var host = URI.create(mediaUrl).getHost();
+            return host == null ? "" : host;
+        } catch (IllegalArgumentException exception) {
+            return "invalid";
         }
     }
 
@@ -114,8 +142,12 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
         private final AtomicBoolean manualPaused = new AtomicBoolean();
         private final AtomicBoolean ttsPaused = new AtomicBoolean();
 
-        private PlaybackTask(XiaozhiMusicPlaybackRequest request) {
+        private PlaybackTask(
+                XiaozhiMusicPlaybackRequest request,
+                XiaozhiMusicPlaybackState.PauseSource initialPauseSource
+        ) {
             this.request = request;
+            pause(initialPauseSource);
         }
 
         private void pause(XiaozhiMusicPlaybackState.PauseSource source) {

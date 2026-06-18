@@ -367,7 +367,7 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
-    void shouldHandleMusicPlayFromHermesAgentEventWithoutTtsSynthesis() {
+    void shouldStartMusicPlayPausedForTtsFromHermesAgentEventWithoutTtsSynthesis() {
         var hermesClient = new StaticSseHermesClient("""
                 event: xiaozhi.agent_event
                 data: {"action":"music_play","title":"稻香","artist":"周杰伦","media_url":"https://example.com/daoxiang.mp3","confirmation_text":"开始播放稻香"}
@@ -381,7 +381,43 @@ class XiaozhiVoiceSessionServiceTest {
         runSingleTurn(serviceWithMusic, session);
 
         assertThat(ttsClient.texts()).isEmpty();
-        assertThat(musicRuntime.playedTitles()).containsExactly("稻香");
+        assertThat(musicRuntime.playedTitles()).isEmpty();
+        assertThat(musicRuntime.playedPausedForTtsTitles()).containsExactly("稻香");
+    }
+
+    @Test
+    void shouldStartMusicPlayPausedForTtsFromResponsesDeltaEmbeddedAgentEventWithoutTtsSynthesis() {
+        var hermesClient = new StaticSseHermesClient("""
+                event: response.output_text.delta
+                data: {"delta":"event: xiaozhi.agent_event\\ndata: {\\"action\\":\\"music_play\\",\\"title\\":\\"晴天\\",\\"artist\\":\\"周杰伦\\",\\"media_url\\":\\"https://example.com/qingtian.mp3\\",\\"confirmation_text\\":\\"开始播放晴天\\"}\\n\\n"}
+                
+                """);
+        var ttsClient = new RecordingTextToSpeechClient();
+        var musicRuntime = new CapturingMusicPlaybackRuntime();
+        var serviceWithMusic = newServiceWithMusic(hermesClient, ttsClient, musicRuntime);
+        var session = openSession(serviceWithMusic);
+
+        runSingleTurn(serviceWithMusic, session);
+
+        assertThat(ttsClient.texts()).isEmpty();
+        assertThat(musicRuntime.playedTitles()).isEmpty();
+        assertThat(musicRuntime.playedPausedForTtsTitles()).containsExactly("晴天");
+    }
+
+    @Test
+    void shouldUseConfirmationTextFromResponsesDeltaEmbeddedReminderEvent() {
+        var hermesClient = new StaticSseHermesClient("""
+                event: response.output_text.delta
+                data: {"delta":"event: xiaozhi.agent_event\\ndata: {\\"action\\":\\"create_reminder\\",\\"message\\":\\"喝水\\",\\"delay_seconds\\":60,\\"confirmation_text\\":\\"1分钟后提醒你喝水\\"}\\n\\n"}
+                
+                """);
+        var ttsClient = new RecordingTextToSpeechClient();
+        var serviceWithReminder = newService(new FakeSpeechToTextClient(), hermesClient, ttsClient);
+        var session = openSession(serviceWithReminder);
+
+        runSingleTurn(serviceWithReminder, session);
+
+        assertThat(ttsClient.texts()).containsExactly("1分钟后提醒你喝水");
     }
 
     @Test
@@ -2613,6 +2649,7 @@ class XiaozhiVoiceSessionServiceTest {
     private static class CapturingMusicPlaybackRuntime extends XiaozhiMusicPlaybackRuntime {
 
         private final java.util.ArrayList<String> playedTitles = new java.util.ArrayList<>();
+        private final java.util.ArrayList<String> playedPausedForTtsTitles = new java.util.ArrayList<>();
         private final java.util.ArrayList<String> events = new java.util.ArrayList<>();
 
         private CapturingMusicPlaybackRuntime() {
@@ -2631,12 +2668,21 @@ class XiaozhiVoiceSessionServiceTest {
         }
 
         @Override
+        public void playPausedForTts(XiaozhiMusicPlaybackRequest request) {
+            playedPausedForTtsTitles.add(request.title());
+        }
+
+        @Override
         public void stop(String deviceId) {
             events.add("stop:" + deviceId);
         }
 
         private List<String> playedTitles() {
             return List.copyOf(playedTitles);
+        }
+
+        private List<String> playedPausedForTtsTitles() {
+            return List.copyOf(playedPausedForTtsTitles);
         }
 
         private List<String> events() {

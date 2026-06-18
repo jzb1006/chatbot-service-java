@@ -26,7 +26,7 @@ public class XiaozhiMusicActionHandler {
         }
         var deviceId = voiceSession.deviceId();
         switch (event.action()) {
-            case "music_play" -> musicPlaybackRuntime.play(new XiaozhiMusicPlaybackRequest(
+            case "music_play" -> musicPlaybackRuntime.playPausedForTts(new XiaozhiMusicPlaybackRequest(
                     webSocketSession,
                     voiceSession,
                     event.title(),

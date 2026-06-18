@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -698,6 +699,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         }
         var extractor = new XiaozhiHermesStreamTextExtractor();
         var eventExtractor = new HermesAgentEventExtractor();
+        var eventTextFilter = new XiaozhiHermesAgentEventTextFilter();
         var segmenter = new XiaozhiSentenceSegmenter();
         var reply = new StringBuilder();
         var sentences = new ArrayList<String>();
@@ -716,12 +718,13 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         asrProvider,
                         extractor,
                         eventExtractor,
+                        eventTextFilter,
                         segmenter,
                         reply,
                         hermesStartedAt
                 );
             }
-            String reminderConfirmationText = null;
+            var reminderConfirmationText = new AtomicReference<String>();
             try (var chunks = hermesClient.streamChat(new HermesRequest(
                     new DeviceId(deviceId),
                     new ConversationId(conversationId),
@@ -733,14 +736,26 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                     }
                     for (var event : eventExtractor.accept(chunk)) {
                         var confirmationText = handleHermesAgentEvent(webSocketSession, voiceSession, turnGuard, event);
-                        if (!musicEvent(event) && reminderConfirmationText == null && confirmationText != null && !confirmationText.isBlank()) {
-                            reminderConfirmationText = confirmationText;
+                        if (!musicEvent(event) && reminderConfirmationText.get() == null && confirmationText != null && !confirmationText.isBlank()) {
+                            reminderConfirmationText.set(confirmationText);
                         }
                     }
                     if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
                         return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
                     }
-                    for (var text : extractor.accept(chunk)) {
+                    for (var text : filterHermesTexts(
+                            webSocketSession,
+                            voiceSession,
+                            turnGuard,
+                            eventTextFilter,
+                            extractor.accept(chunk),
+                            false,
+                            confirmationText -> {
+                                if (reminderConfirmationText.get() == null && confirmationText != null && !confirmationText.isBlank()) {
+                                    reminderConfirmationText.set(confirmationText);
+                                }
+                            }
+                    )) {
                         if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
                             return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
                         }
@@ -749,7 +764,19 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                     }
                 }
             }
-            for (var text : extractor.flush()) {
+            for (var text : filterHermesTexts(
+                    webSocketSession,
+                    voiceSession,
+                    turnGuard,
+                    eventTextFilter,
+                    extractor.flush(),
+                    true,
+                    confirmationText -> {
+                        if (reminderConfirmationText.get() == null && confirmationText != null && !confirmationText.isBlank()) {
+                            reminderConfirmationText.set(confirmationText);
+                        }
+                    }
+            )) {
                 if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
                     return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
                 }
@@ -760,9 +787,9 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             if (!finalSentence.isBlank()) {
                 sentences.add(finalSentence);
             }
-            if (reply.toString().isBlank() && reminderConfirmationText != null && !reminderConfirmationText.isBlank()) {
-                reply.append(reminderConfirmationText);
-                sentences.add(reminderConfirmationText);
+            if (reply.toString().isBlank() && reminderConfirmationText.get() != null && !reminderConfirmationText.get().isBlank()) {
+                reply.append(reminderConfirmationText.get());
+                sentences.add(reminderConfirmationText.get());
             }
             if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
                 return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
@@ -821,6 +848,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             String asrProvider,
             XiaozhiHermesStreamTextExtractor extractor,
             HermesAgentEventExtractor eventExtractor,
+            XiaozhiHermesAgentEventTextFilter eventTextFilter,
             XiaozhiSentenceSegmenter segmenter,
             StringBuilder reply,
             long hermesStartedAt
@@ -844,6 +872,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         asrMillis,
                         extractor,
                         eventExtractor,
+                        eventTextFilter,
                         segmenter,
                         reply,
                         hermesStartedAt,
@@ -880,6 +909,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             long asrMillis,
             XiaozhiHermesStreamTextExtractor extractor,
             HermesAgentEventExtractor eventExtractor,
+            XiaozhiHermesAgentEventTextFilter eventTextFilter,
             XiaozhiSentenceSegmenter segmenter,
             StringBuilder reply,
             long hermesStartedAt,
@@ -900,6 +930,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         chunk,
                         extractor,
                         eventExtractor,
+                        eventTextFilter,
                         segmenter,
                         reply,
                         sentenceSink,
@@ -926,6 +957,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                 turnGeneration,
                 turnGuard,
                 extractor,
+                eventTextFilter,
                 segmenter,
                 reply,
                 sentenceSink,
@@ -943,25 +975,38 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             String chunk,
             XiaozhiHermesStreamTextExtractor extractor,
             HermesAgentEventExtractor eventExtractor,
+            XiaozhiHermesAgentEventTextFilter eventTextFilter,
             XiaozhiSentenceSegmenter segmenter,
             StringBuilder reply,
             XiaozhiTtsSentenceSink sentenceSink,
             String reminderConfirmationText
     ) {
-        var confirmation = reminderConfirmationText;
+        var confirmationRef = new AtomicReference<>(reminderConfirmationText);
         for (var event : eventExtractor.accept(chunk)) {
             var confirmationText = handleHermesAgentEvent(webSocketSession, voiceSession, turnGuard, event);
-            if (!musicEvent(event) && confirmation == null && confirmationText != null && !confirmationText.isBlank()) {
-                confirmation = confirmationText;
+            if (!musicEvent(event) && confirmationRef.get() == null && confirmationText != null && !confirmationText.isBlank()) {
+                confirmationRef.set(confirmationText);
             }
         }
-        for (var text : extractor.accept(chunk)) {
+        for (var text : filterHermesTexts(
+                webSocketSession,
+                voiceSession,
+                turnGuard,
+                eventTextFilter,
+                extractor.accept(chunk),
+                false,
+                confirmationText -> {
+                    if (confirmationRef.get() == null && confirmationText != null && !confirmationText.isBlank()) {
+                        confirmationRef.set(confirmationText);
+                    }
+                }
+        )) {
             reply.append(text);
             for (var sentence : segmenter.accept(text)) {
                 sentenceSink.accept(sentence);
             }
         }
-        return confirmation;
+        return confirmationRef.get();
     }
 
     private void flushHermesSentences(
@@ -970,6 +1015,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             long turnGeneration,
             TurnGuard turnGuard,
             XiaozhiHermesStreamTextExtractor extractor,
+            XiaozhiHermesAgentEventTextFilter eventTextFilter,
             XiaozhiSentenceSegmenter segmenter,
             StringBuilder reply,
             XiaozhiTtsSentenceSink sentenceSink,
@@ -977,7 +1023,20 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             long asrMillis,
             long hermesStartedAt
     ) {
-        for (var text : extractor.flush()) {
+        var confirmationRef = new AtomicReference<>(reminderConfirmationText);
+        for (var text : filterHermesTexts(
+                webSocketSession,
+                voiceSession,
+                turnGuard,
+                eventTextFilter,
+                extractor.flush(),
+                true,
+                confirmationText -> {
+                    if (confirmationRef.get() == null && confirmationText != null && !confirmationText.isBlank()) {
+                        confirmationRef.set(confirmationText);
+                    }
+                }
+        )) {
             ensureTurnActive(webSocketSession, voiceSession, turnGeneration, turnGuard);
             reply.append(text);
             for (var sentence : segmenter.accept(text)) {
@@ -989,13 +1048,55 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         if (!finalSentence.isBlank()) {
             sentenceSink.accept(finalSentence);
         }
-        if (reply.toString().isBlank() && reminderConfirmationText != null && !reminderConfirmationText.isBlank()) {
-            reply.append(reminderConfirmationText);
-            sentenceSink.accept(reminderConfirmationText);
+        if (reply.toString().isBlank() && confirmationRef.get() != null && !confirmationRef.get().isBlank()) {
+            reply.append(confirmationRef.get());
+            sentenceSink.accept(confirmationRef.get());
         }
         if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
             cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
             throw new XiaozhiTtsTurnCancelledException();
+        }
+    }
+
+    private List<String> filterHermesTexts(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            TurnGuard turnGuard,
+            XiaozhiHermesAgentEventTextFilter eventTextFilter,
+            List<String> texts,
+            boolean flush,
+            java.util.function.Consumer<String> confirmationConsumer
+    ) {
+        var filteredTexts = new ArrayList<String>();
+        for (var text : texts) {
+            var result = eventTextFilter.accept(text);
+            handleHermesAgentEvents(webSocketSession, voiceSession, turnGuard, result.events(), confirmationConsumer);
+            if (!result.text().isEmpty()) {
+                filteredTexts.add(result.text());
+            }
+        }
+        if (flush) {
+            var flushed = eventTextFilter.flush();
+            handleHermesAgentEvents(webSocketSession, voiceSession, turnGuard, flushed.events(), confirmationConsumer);
+            if (!flushed.text().isEmpty()) {
+                filteredTexts.add(flushed.text());
+            }
+        }
+        return List.copyOf(filteredTexts);
+    }
+
+    private void handleHermesAgentEvents(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            TurnGuard turnGuard,
+            List<HermesAgentEvent> events,
+            java.util.function.Consumer<String> confirmationConsumer
+    ) {
+        for (var event : events) {
+            var confirmationText = handleHermesAgentEvent(webSocketSession, voiceSession, turnGuard, event);
+            if (!musicEvent(event) && confirmationText != null && !confirmationText.isBlank()) {
+                confirmationConsumer.accept(confirmationText);
+            }
         }
     }
 
