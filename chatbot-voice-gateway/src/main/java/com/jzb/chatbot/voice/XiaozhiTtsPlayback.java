@@ -68,37 +68,51 @@ public class XiaozhiTtsPlayback {
         if (frames == null || frames.isEmpty()) {
             return true;
         }
-        if (sentFrames > 0) {
-            playPosition += SENTENCE_GAP_NS;
-            waitForFrameTime();
-            if (cancelled()) {
-                return false;
-            }
-        }
-        if (cancelled()) {
+        if (!startSentence(sentence)) {
             return false;
         }
-        sendText(eventFactory.ttsSentenceStart(voiceSession.sessionId(), sentence));
-        startedSentences++;
         for (var frame : frames) {
-            if (cancelled()) {
+            if (!playFrame(frame)) {
                 return false;
             }
-            waitForFrameTime();
-            if (cancelled()) {
-                return false;
-            }
-            webSocketSession.sendMessage(new BinaryMessage(
-                    codec.encodeAudioFrame(voiceSession.protocolVersion(), 0, frame)
-            ));
-            sentFrames++;
-            playPosition += OPUS_FRAME_SEND_INTERVAL_NS;
         }
         return true;
     }
 
     public boolean playSentence(String sentence, List<ByteBuffer> frames, BooleanSupplier activeSupplier) throws IOException {
         return playSentence(sentence, frames);
+    }
+
+    public boolean startSentence(String sentence) throws IOException {
+        if (cancelled()) {
+            return false;
+        }
+        if (sentFrames > 0) {
+            playPosition += SENTENCE_GAP_NS;
+            waitForFrameTime();
+        }
+        if (cancelled()) {
+            return false;
+        }
+        sendText(eventFactory.ttsSentenceStart(voiceSession.sessionId(), sentence));
+        startedSentences++;
+        return true;
+    }
+
+    public boolean playFrame(ByteBuffer frame) throws IOException {
+        if (cancelled() || frame == null || !frame.hasRemaining()) {
+            return false;
+        }
+        waitForFrameTime();
+        if (cancelled()) {
+            return false;
+        }
+        webSocketSession.sendMessage(new BinaryMessage(
+                codec.encodeAudioFrame(voiceSession.protocolVersion(), 0, frame)
+        ));
+        sentFrames++;
+        playPosition += OPUS_FRAME_SEND_INTERVAL_NS;
+        return true;
     }
 
     public void cancel() {

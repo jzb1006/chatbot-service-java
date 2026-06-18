@@ -50,6 +50,10 @@ class SmokeStats:
     tts_stop_count: int = 0
     error_count: int = 0
     first_error: str = ""
+    tts_start_at: float | None = None
+    first_sentence_start_at: float | None = None
+    first_binary_at: float | None = None
+    tts_stop_at: float | None = None
 
     def fields(self) -> list[tuple[str, str]]:
         return [
@@ -68,6 +72,9 @@ class SmokeStats:
             ),
             ("binary_frame_count", str(self.binary_frame_count)),
             ("tts_stop_count", str(self.tts_stop_count)),
+            ("first_sentence_start_ms", format_elapsed_ms(self.tts_start_at, self.first_sentence_start_at)),
+            ("first_binary_ms", format_elapsed_ms(self.tts_start_at, self.first_binary_at)),
+            ("tts_total_ms", format_elapsed_ms(self.tts_start_at, self.tts_stop_at)),
             ("error_count", str(self.error_count)),
         ]
 
@@ -311,8 +318,11 @@ def collect_events_until_tts_stop(websocket: MinimalWebSocket, timeout: float, s
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         frame = websocket.recv_data_frame()
+        received_at = time.monotonic()
         if frame.opcode == OPCODE_BINARY:
             stats.binary_frame_count += 1
+            if stats.first_binary_at is None:
+                stats.first_binary_at = received_at
             continue
         try:
             event = json.loads(frame.payload.decode("utf-8"))
@@ -337,13 +347,18 @@ def collect_events_until_tts_stop(websocket: MinimalWebSocket, timeout: float, s
         elif event_type == "tts" and state:
             if state == "start":
                 stats.tts_start_count += 1
+                if stats.tts_start_at is None:
+                    stats.tts_start_at = received_at
             elif state == "sentence_start":
                 stats.tts_sentence_start_count += 1
+                if stats.first_sentence_start_at is None:
+                    stats.first_sentence_start_at = received_at
                 sentence = event.get("text")
                 if isinstance(sentence, str):
                     stats.tts_sentences.append(sentence)
             elif state == "stop":
                 stats.tts_stop_count += 1
+                stats.tts_stop_at = received_at
             if state == "stop":
                 return stats
     raise WebSocketSmokeError("timeout waiting for tts.stop")
@@ -381,6 +396,12 @@ def synthesize_input_text_to_opus_frames(text: str) -> list[bytes]:
 
 def format_bool(value: bool) -> str:
     return "true" if value else "false"
+
+
+def format_elapsed_ms(start_at: float | None, end_at: float | None) -> str:
+    if start_at is None or end_at is None:
+        return ""
+    return str(round((end_at - start_at) * 1000))
 
 
 def format_first_error(stats: SmokeStats) -> str:

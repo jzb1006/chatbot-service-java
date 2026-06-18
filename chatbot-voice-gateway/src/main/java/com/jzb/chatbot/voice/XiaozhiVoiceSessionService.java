@@ -18,9 +18,12 @@ import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
 import com.jzb.chatbot.voice.reminder.XiaozhiReminderIntent;
 import com.jzb.chatbot.voice.reminder.XiaozhiReminderRequestedEvent;
+import com.jzb.chatbot.voice.tts.XiaozhiStreamingTtsRequest;
+import com.jzb.chatbot.voice.tts.XiaozhiTtsSentenceSink;
 import com.jzb.chatbot.voice.tts.XiaozhiTtsRequest;
 import com.jzb.chatbot.voice.tts.XiaozhiTtsResult;
 import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime;
+import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime.StreamingTtsWriteException;
 import com.jzb.chatbot.voice.tts.XiaozhiVoiceProfileResolver;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -320,6 +323,18 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         var ttsStartedAt = System.nanoTime();
         try {
             var profile = voiceProfileResolver.resolve(voiceSession.deviceId());
+            if (ttsRuntime.streamingEnabled()) {
+                return ttsRuntime.playStreaming(new XiaozhiStreamingTtsRequest(
+                        webSocketSession,
+                        voiceSession,
+                        profile.toTtsOptions(),
+                        playbackGeneration,
+                        () -> notificationCancelled(webSocketSession, voiceSession, playbackGeneration)
+                ), sentenceSink -> {
+                    sentenceSink.accept(text);
+                    sentenceSink.complete();
+                }).played();
+            }
             return ttsRuntime.speak(new XiaozhiTtsRequest(
                     webSocketSession,
                     voiceSession,
@@ -578,8 +593,26 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         var reply = new StringBuilder();
         var sentences = new ArrayList<String>();
         var hermesStartedAt = System.nanoTime();
-        String reminderConfirmationText = null;
         try {
+            if (ttsRuntime.streamingEnabled()) {
+                return streamChatAndSpeakWithStreamingTts(
+                        webSocketSession,
+                        voiceSession,
+                        turnGuard,
+                        deviceId,
+                        conversationId,
+                        turnGeneration,
+                        userText,
+                        asrMillis,
+                        asrProvider,
+                        extractor,
+                        eventExtractor,
+                        segmenter,
+                        reply,
+                        hermesStartedAt
+                );
+            }
+            String reminderConfirmationText = null;
             try (var chunks = hermesClient.streamChat(new HermesRequest(
                     new DeviceId(deviceId),
                     new ConversationId(conversationId),
@@ -667,6 +700,205 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         }
     }
 
+    private TurnResult streamChatAndSpeakWithStreamingTts(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            TurnGuard turnGuard,
+            String deviceId,
+            String conversationId,
+            long turnGeneration,
+            String userText,
+            long asrMillis,
+            String asrProvider,
+            XiaozhiHermesStreamTextExtractor extractor,
+            HermesAgentEventExtractor eventExtractor,
+            XiaozhiSentenceSegmenter segmenter,
+            StringBuilder reply,
+            long hermesStartedAt
+    ) {
+        var ttsOperationStartedAt = System.nanoTime();
+        var playbackResult = speakStreamingWithRuntime(
+                webSocketSession,
+                voiceSession,
+                turnGeneration,
+                turnGuard,
+                ttsOperationStartedAt,
+                "语音合成失败",
+                sentenceSink -> streamHermesIntoSentenceSink(
+                        webSocketSession,
+                        voiceSession,
+                        turnGuard,
+                        deviceId,
+                        conversationId,
+                        turnGeneration,
+                        userText,
+                        asrMillis,
+                        extractor,
+                        eventExtractor,
+                        segmenter,
+                        reply,
+                        hermesStartedAt,
+                        sentenceSink
+                )
+        );
+        var hermesMillis = elapsedMillis(hermesStartedAt);
+        logTurnCompleted(
+                webSocketSession,
+                voiceSession,
+                playbackResult,
+                asrProvider,
+                asrMillis,
+                hermesMillis,
+                playbackResult.ttsMillis()
+        );
+        if (playbackResult.failed()) {
+            return TurnResult.failure();
+        }
+        if (playbackResult.cancelled()) {
+            return TurnResult.cancelled(reply.toString());
+        }
+        return TurnResult.completed(reply.toString());
+    }
+
+    private void streamHermesIntoSentenceSink(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            TurnGuard turnGuard,
+            String deviceId,
+            String conversationId,
+            long turnGeneration,
+            String userText,
+            long asrMillis,
+            XiaozhiHermesStreamTextExtractor extractor,
+            HermesAgentEventExtractor eventExtractor,
+            XiaozhiSentenceSegmenter segmenter,
+            StringBuilder reply,
+            long hermesStartedAt,
+            XiaozhiTtsSentenceSink sentenceSink
+    ) {
+        String reminderConfirmationText = null;
+        try (var chunks = hermesClient.streamChat(new HermesRequest(
+                new DeviceId(deviceId),
+                new ConversationId(conversationId),
+                userText
+        ), hermesClientConfig)) {
+            for (var chunk : (Iterable<String>) chunks::iterator) {
+                ensureTurnActive(webSocketSession, voiceSession, turnGeneration, turnGuard);
+                reminderConfirmationText = acceptHermesChunk(
+                        voiceSession,
+                        turnGuard,
+                        chunk,
+                        extractor,
+                        eventExtractor,
+                        segmenter,
+                        reply,
+                        sentenceSink,
+                        reminderConfirmationText
+                );
+            }
+        } catch (XiaozhiTtsTurnCancelledException exception) {
+            throw exception;
+        } catch (StreamingTtsWriteException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
+                throw new XiaozhiTtsTurnCancelledException();
+            }
+            log.warn("xiaozhi hermes failed, sessionId={}, deviceId={}, message={}",
+                    webSocketSession.getId(), deviceId, exception.getMessage(), exception);
+            trySendTurnErrorIfActive(webSocketSession, voiceSession, turnGeneration, "hermes_failed", "对话服务失败");
+            voiceSession.markIdleIfTurnActive(turnGeneration);
+            throw new XiaozhiHermesStreamingException(exception);
+        }
+        flushHermesSentences(
+                webSocketSession,
+                voiceSession,
+                turnGeneration,
+                turnGuard,
+                extractor,
+                segmenter,
+                reply,
+                sentenceSink,
+                reminderConfirmationText,
+                asrMillis,
+                hermesStartedAt
+        );
+        sentenceSink.complete();
+    }
+
+    private String acceptHermesChunk(
+            XiaozhiVoiceSession voiceSession,
+            TurnGuard turnGuard,
+            String chunk,
+            XiaozhiHermesStreamTextExtractor extractor,
+            HermesAgentEventExtractor eventExtractor,
+            XiaozhiSentenceSegmenter segmenter,
+            StringBuilder reply,
+            XiaozhiTtsSentenceSink sentenceSink,
+            String reminderConfirmationText
+    ) {
+        var confirmation = reminderConfirmationText;
+        for (var event : eventExtractor.accept(chunk)) {
+            var confirmationText = handleHermesAgentEvent(voiceSession, turnGuard, event);
+            if (confirmation == null && confirmationText != null && !confirmationText.isBlank()) {
+                confirmation = confirmationText;
+            }
+        }
+        for (var text : extractor.accept(chunk)) {
+            reply.append(text);
+            for (var sentence : segmenter.accept(text)) {
+                sentenceSink.accept(sentence);
+            }
+        }
+        return confirmation;
+    }
+
+    private void flushHermesSentences(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long turnGeneration,
+            TurnGuard turnGuard,
+            XiaozhiHermesStreamTextExtractor extractor,
+            XiaozhiSentenceSegmenter segmenter,
+            StringBuilder reply,
+            XiaozhiTtsSentenceSink sentenceSink,
+            String reminderConfirmationText,
+            long asrMillis,
+            long hermesStartedAt
+    ) {
+        for (var text : extractor.flush()) {
+            ensureTurnActive(webSocketSession, voiceSession, turnGeneration, turnGuard);
+            reply.append(text);
+            for (var sentence : segmenter.accept(text)) {
+                sentenceSink.accept(sentence);
+            }
+        }
+        ensureTurnActive(webSocketSession, voiceSession, turnGeneration, turnGuard);
+        var finalSentence = segmenter.flush();
+        if (!finalSentence.isBlank()) {
+            sentenceSink.accept(finalSentence);
+        }
+        if (reply.toString().isBlank() && reminderConfirmationText != null && !reminderConfirmationText.isBlank()) {
+            reply.append(reminderConfirmationText);
+            sentenceSink.accept(reminderConfirmationText);
+        }
+        if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
+            cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
+            throw new XiaozhiTtsTurnCancelledException();
+        }
+    }
+
+    private void ensureTurnActive(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long turnGeneration,
+            TurnGuard turnGuard
+    ) {
+        if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
+            throw new XiaozhiTtsTurnCancelledException();
+        }
+    }
+
     private String handleHermesAgentEvent(
             XiaozhiVoiceSession voiceSession,
             TurnGuard turnGuard,
@@ -722,6 +954,42 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                 return PlaybackResult.cancelled(result, ttsMillis);
             }
             return result.played() ? PlaybackResult.completed(result, ttsMillis) : PlaybackResult.cancelled(result, ttsMillis);
+        } catch (RuntimeException exception) {
+            handleTurnTtsFailure(webSocketSession, voiceSession, turnGeneration, ttsStartedAt, errorMessage, exception);
+            return PlaybackResult.FAILED;
+        }
+    }
+
+    private PlaybackResult speakStreamingWithRuntime(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long turnGeneration,
+            TurnGuard turnGuard,
+            long ttsStartedAt,
+            String errorMessage,
+            java.util.function.Consumer<XiaozhiTtsSentenceSink> sentenceProducer
+    ) {
+        try {
+            var profile = voiceProfileResolver.resolve(voiceSession.deviceId());
+            if (cancelledBeforeRuntime(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
+                return PlaybackResult.cancelledBeforeRuntime();
+            }
+            var runtimeStartedAt = System.nanoTime();
+            var result = ttsRuntime.playStreaming(new XiaozhiStreamingTtsRequest(
+                    webSocketSession,
+                    voiceSession,
+                    profile.toTtsOptions(),
+                    () -> cancelledBeforeRuntime(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()
+            ), sentenceProducer);
+            var ttsMillis = elapsedMillis(runtimeStartedAt);
+            if (result.cancelled()) {
+                return PlaybackResult.cancelled(result, ttsMillis);
+            }
+            return result.played() ? PlaybackResult.completed(result, ttsMillis) : PlaybackResult.cancelled(result, ttsMillis);
+        } catch (XiaozhiTtsTurnCancelledException exception) {
+            return PlaybackResult.cancelledBeforeRuntime();
+        } catch (XiaozhiHermesStreamingException exception) {
+            return PlaybackResult.FAILED;
         } catch (RuntimeException exception) {
             handleTurnTtsFailure(webSocketSession, voiceSession, turnGeneration, ttsStartedAt, errorMessage, exception);
             return PlaybackResult.FAILED;
@@ -977,6 +1245,16 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
 
         private boolean active() {
             return activeSupplier.getAsBoolean();
+        }
+    }
+
+    private static final class XiaozhiTtsTurnCancelledException extends RuntimeException {
+    }
+
+    private static final class XiaozhiHermesStreamingException extends RuntimeException {
+
+        private XiaozhiHermesStreamingException(Throwable cause) {
+            super(cause);
         }
     }
 

@@ -58,8 +58,9 @@ chatbot:
     tts:
       default-speed: ${CHATBOT_VOICE_TTS_DEFAULT_SPEED:1.0}
       default-pitch: ${CHATBOT_VOICE_TTS_DEFAULT_PITCH:1.0}
-      provider: tencent
+      provider: ${CHATBOT_VOICE_TTS_PROVIDER:tencent}
       tencent:
+        app-id: ${TENCENT_CLOUD_APP_ID:}
         secret-id: ${TENCENT_CLOUD_SECRET_ID:}
         secret-key: ${TENCENT_CLOUD_SECRET_KEY:}
         region: ap-guangzhou
@@ -68,3 +69,4 @@ chatbot:
         codec: pcm
         sample-rate: 16000
         timeout-seconds: 15
+        stream-timeout-seconds: 30

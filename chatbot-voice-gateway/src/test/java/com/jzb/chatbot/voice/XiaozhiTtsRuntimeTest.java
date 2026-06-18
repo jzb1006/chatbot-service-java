@@ -7,14 +7,20 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.common.id.VoiceId;
+import com.jzb.chatbot.speech.StreamingTextToSpeechClient;
+import com.jzb.chatbot.speech.StreamingTextToSpeechListener;
+import com.jzb.chatbot.speech.StreamingTextToSpeechSession;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.speech.TextToSpeechOptions;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
+import com.jzb.chatbot.voice.tts.XiaozhiStreamingTtsRequest;
+import com.jzb.chatbot.voice.tts.XiaozhiTtsSentenceSink;
 import com.jzb.chatbot.voice.tts.XiaozhiTtsRequest;
 import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -403,13 +409,163 @@ class XiaozhiTtsRuntimeTest {
         assertThat(voiceSession.state()).isEqualTo(XiaozhiVoiceSession.State.SPEAKING);
     }
 
+    @Test
+    void shouldSendStreamingFramesAfterSentenceStart() throws Exception {
+        var runtime = newRuntimeWithStreamingTts(new PushStreamingTextToSpeechClient());
+        var session = openSession();
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        var thread = Thread.startVirtualThread(() -> runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                voiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> {
+            sentenceSink.accept("第一句内容。");
+            sentenceSink.complete();
+        }));
+        thread.join(2_000L);
+
+        assertThat(thread.isAlive()).isFalse();
+        assertThat(sentenceStartTexts(session)).containsExactly("第一句内容。");
+        assertThat(binaryMessages(session)).isNotEmpty();
+        assertThat(textPayloads(session))
+                .filteredOn(payload -> payload.contains("\"type\":\"tts\"") && payload.contains("\"state\":\"stop\""))
+                .hasSize(1);
+    }
+
+    @Test
+    void shouldCancelStreamingTtsSessionWhenRuntimeIsCancelled() throws Exception {
+        var streamingClient = new BlockingStreamingTextToSpeechClient();
+        var runtime = newRuntimeWithStreamingTts(streamingClient);
+        var session = new TimingWebSocketSession("ws-session-1");
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        var thread = Thread.startVirtualThread(() -> runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                voiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> {
+            sentenceSink.accept("第一句内容。");
+            streamingClient.awaitFirstText();
+        }));
+
+        assertThat(streamingClient.awaitFirstText()).isTrue();
+        runtime.cancel(session.getId());
+        thread.join(2_000L);
+
+        assertThat(thread.isAlive()).isFalse();
+        assertThat(streamingClient.cancelled()).isTrue();
+        assertThat(session.stopSentAt()).isPositive();
+    }
+
+    @Test
+    void shouldNotLetOldStreamingCleanupRemoveNewActiveStreamingSession() throws Exception {
+        var streamingClient = new BlockingStreamingTextToSpeechClient();
+        var runtime = newRuntimeWithStreamingTts(streamingClient);
+        var session = new TimingWebSocketSession("ws-session-1");
+        var oldVoiceSession = new XiaozhiVoiceSession(session.getId());
+
+        var oldThread = Thread.startVirtualThread(() -> runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                oldVoiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> {
+            sentenceSink.accept("上一轮。");
+            streamingClient.awaitFirstTextCount(1);
+        }));
+        assertThat(streamingClient.awaitFirstTextCount(1)).isTrue();
+
+        var newVoiceSession = new XiaozhiVoiceSession(session.getId());
+        var newThread = Thread.startVirtualThread(() -> runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                newVoiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> {
+            sentenceSink.accept("新一轮。");
+            streamingClient.awaitCancelCount(1);
+        }));
+        assertThat(streamingClient.awaitFirstTextCount(2)).isTrue();
+        streamingClient.cancelFirstSession();
+        oldThread.join(2_000L);
+
+        runtime.cancel(session.getId());
+        newThread.join(2_000L);
+
+        assertThat(oldThread.isAlive()).isFalse();
+        assertThat(newThread.isAlive()).isFalse();
+        assertThat(streamingClient.cancelCount()).isEqualTo(2);
+    }
+
+    @Test
+    void shouldFallbackToSynchronousTtsWhenStreamingProviderFailsBeforeAudio() {
+        var streamingClient = new FailingStreamingTextToSpeechClient();
+        var fallbackClient = new RecordingTextToSpeechClient();
+        var runtime = newRuntimeWithStreamingTts(streamingClient, fallbackClient);
+        var session = openSession();
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        var result = runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                voiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> {
+            sentenceSink.accept("第一句内容。");
+            sentenceSink.complete();
+        });
+
+        assertThat(result.played()).isTrue();
+        assertThat(fallbackClient.texts()).containsExactly("第一句内容。");
+        assertThat(sentenceStartTexts(session)).containsExactly("第一句内容。");
+        assertThat(binaryMessages(session)).isNotEmpty();
+    }
+
+    @Test
+    void shouldStillSendStopWhenStreamingSessionCloseFails() {
+        var runtime = newRuntimeWithStreamingTts(new CloseFailingStreamingTextToSpeechClient());
+        var session = openSession();
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        var result = runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                voiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> {
+            sentenceSink.accept("第一句内容。");
+            sentenceSink.complete();
+        });
+
+        assertThat(result.played()).isTrue();
+        assertThat(textPayloads(session))
+                .filteredOn(payload -> payload.contains("\"type\":\"tts\"") && payload.contains("\"state\":\"stop\""))
+                .hasSize(1);
+        assertThat(voiceSession.state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
     private XiaozhiTtsRuntime newRuntimeWithFakeTts() {
         return newRuntime(new FakeTextToSpeechClient());
     }
 
     private XiaozhiTtsRuntime newRuntime(TextToSpeechClient textToSpeechClient) {
+        return newRuntimeWithStreamingTts(null, textToSpeechClient);
+    }
+
+    private XiaozhiTtsRuntime newRuntimeWithStreamingTts(StreamingTextToSpeechClient streamingClient) {
+        return newRuntimeWithStreamingTts(streamingClient, new FakeTextToSpeechClient());
+    }
+
+    private XiaozhiTtsRuntime newRuntimeWithStreamingTts(
+            StreamingTextToSpeechClient streamingClient,
+            TextToSpeechClient fallbackClient
+    ) {
         return new XiaozhiTtsRuntime(
-                textToSpeechClient,
+                fallbackClient,
+                streamingClient,
                 new XiaozhiMessageCodec(OBJECT_MAPPER),
                 new XiaozhiServerEventFactory(OBJECT_MAPPER)
         );
@@ -573,6 +729,268 @@ class XiaozhiTtsRuntimeTest {
                 throw new IOException("stop failed");
             }
             super.sendMessage(message);
+        }
+    }
+
+    private static class PushStreamingTextToSpeechClient implements StreamingTextToSpeechClient {
+
+        @Override
+        public StreamingTextToSpeechSession open(
+                TextToSpeechOptions options,
+                StreamingTextToSpeechListener listener
+        ) {
+            listener.onReady();
+            return new PushStreamingTextToSpeechSession(listener);
+        }
+    }
+
+    private static class PushStreamingTextToSpeechSession implements StreamingTextToSpeechSession {
+
+        private final StreamingTextToSpeechListener listener;
+        private boolean completed;
+
+        private PushStreamingTextToSpeechSession(StreamingTextToSpeechListener listener) {
+            this.listener = listener;
+        }
+
+        @Override
+        public void sendText(String text) {
+            listener.onAudioFrame(ByteBuffer.wrap(new byte[] {1, 2, 3}));
+        }
+
+        @Override
+        public void complete() {
+            completed = true;
+            listener.onCompleted();
+        }
+
+        @Override
+        public void cancel() {
+            completed = true;
+        }
+
+        @Override
+        public boolean awaitFinal(Duration timeout) {
+            return completed;
+        }
+
+        @Override
+        public void close() {
+            cancel();
+        }
+    }
+
+    private static class BlockingStreamingTextToSpeechClient implements StreamingTextToSpeechClient {
+
+        private final List<BlockingStreamingTextToSpeechSession> sessions = new java.util.concurrent.CopyOnWriteArrayList<>();
+        private int textCount;
+        private int cancelCount;
+
+        @Override
+        public StreamingTextToSpeechSession open(
+                TextToSpeechOptions options,
+                StreamingTextToSpeechListener listener
+        ) {
+            listener.onReady();
+            var session = new BlockingStreamingTextToSpeechSession(listener);
+            sessions.add(session);
+            return session;
+        }
+
+        private boolean awaitFirstText() {
+            return awaitFirstTextCount(1);
+        }
+
+        private boolean cancelled() {
+            return cancelCount() > 0;
+        }
+
+        private synchronized boolean awaitFirstTextCount(int expectedCount) {
+            var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L);
+            while (textCount < expectedCount) {
+                var remaining = deadline - System.nanoTime();
+                if (remaining <= 0) {
+                    return false;
+                }
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(this, remaining);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private synchronized boolean awaitCancelCount(int expectedCount) {
+            var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2L);
+            while (cancelCount < expectedCount) {
+                var remaining = deadline - System.nanoTime();
+                if (remaining <= 0) {
+                    return false;
+                }
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(this, remaining);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private void cancelFirstSession() {
+            sessions.getFirst().cancel();
+        }
+
+        private synchronized int cancelCount() {
+            return cancelCount;
+        }
+
+        private synchronized void markTextReceived() {
+            textCount++;
+            notifyAll();
+        }
+
+        private synchronized void markCancelled() {
+            cancelCount++;
+            notifyAll();
+        }
+
+        private final class BlockingStreamingTextToSpeechSession implements StreamingTextToSpeechSession {
+
+            private final StreamingTextToSpeechListener listener;
+            private final CountDownLatch sessionCancelled = new CountDownLatch(1);
+            private final AtomicBoolean cancelled = new AtomicBoolean();
+
+            private BlockingStreamingTextToSpeechSession(StreamingTextToSpeechListener listener) {
+                this.listener = listener;
+            }
+
+            @Override
+            public void sendText(String text) {
+                markTextReceived();
+            }
+
+            @Override
+            public void complete() {
+            }
+
+            @Override
+            public void cancel() {
+                if (cancelled.compareAndSet(false, true)) {
+                    markCancelled();
+                    sessionCancelled.countDown();
+                    listener.onCompleted();
+                }
+            }
+
+            @Override
+            public boolean awaitFinal(Duration timeout) {
+                try {
+                    return sessionCancelled.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+                } catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+
+            @Override
+            public void close() {
+                cancel();
+            }
+        }
+    }
+
+    private static class FailingStreamingTextToSpeechClient implements StreamingTextToSpeechClient {
+
+        @Override
+        public StreamingTextToSpeechSession open(
+                TextToSpeechOptions options,
+                StreamingTextToSpeechListener listener
+        ) {
+            listener.onReady();
+            return new FailingStreamingTextToSpeechSession(listener);
+        }
+    }
+
+    private static class FailingStreamingTextToSpeechSession implements StreamingTextToSpeechSession {
+
+        private final StreamingTextToSpeechListener listener;
+
+        private FailingStreamingTextToSpeechSession(StreamingTextToSpeechListener listener) {
+            this.listener = listener;
+        }
+
+        @Override
+        public void sendText(String text) {
+            listener.onFailed(new IllegalStateException("streaming tts boom"));
+        }
+
+        @Override
+        public void complete() {
+        }
+
+        @Override
+        public void cancel() {
+        }
+
+        @Override
+        public boolean awaitFinal(Duration timeout) {
+            return true;
+        }
+
+        @Override
+        public void close() {
+            cancel();
+        }
+    }
+
+    private static class CloseFailingStreamingTextToSpeechClient implements StreamingTextToSpeechClient {
+
+        @Override
+        public StreamingTextToSpeechSession open(
+                TextToSpeechOptions options,
+                StreamingTextToSpeechListener listener
+        ) {
+            listener.onReady();
+            return new CloseFailingStreamingTextToSpeechSession(listener);
+        }
+    }
+
+    private static class CloseFailingStreamingTextToSpeechSession implements StreamingTextToSpeechSession {
+
+        private final StreamingTextToSpeechListener listener;
+        private boolean completed;
+
+        private CloseFailingStreamingTextToSpeechSession(StreamingTextToSpeechListener listener) {
+            this.listener = listener;
+        }
+
+        @Override
+        public void sendText(String text) {
+            listener.onAudioFrame(ByteBuffer.wrap(new byte[] {1, 2, 3}));
+        }
+
+        @Override
+        public void complete() {
+            completed = true;
+            listener.onCompleted();
+        }
+
+        @Override
+        public void cancel() {
+            completed = true;
+        }
+
+        @Override
+        public boolean awaitFinal(Duration timeout) {
+            return completed;
+        }
+
+        @Override
+        public void close() {
+            throw new IllegalStateException("close unavailable");
         }
     }
 

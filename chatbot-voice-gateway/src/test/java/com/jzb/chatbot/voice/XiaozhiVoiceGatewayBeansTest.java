@@ -5,12 +5,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.common.id.VoiceId;
 import com.jzb.chatbot.hermes.HermesClientConfig;
+import com.jzb.chatbot.speech.DisabledStreamingTextToSpeechClient;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeStreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
 import com.jzb.chatbot.speech.SpeechToTextClient;
 import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
+import com.jzb.chatbot.speech.StreamingTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextClient;
+import com.jzb.chatbot.speech.TencentCloudStreamingTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextClient;
 import com.jzb.chatbot.speech.TextToSpeechClient;
@@ -73,6 +76,17 @@ class XiaozhiVoiceGatewayBeansTest {
             var client = context.getBean(TextToSpeechClient.class);
 
             assertThat(client).isInstanceOf(FakeTextToSpeechClient.class);
+        });
+    }
+
+    @Test
+    void shouldUseDisabledStreamingTextToSpeechByDefault() {
+        contextRunner.run(context -> {
+            var client = context.getBean(StreamingTextToSpeechClient.class);
+            var runtime = context.getBean(XiaozhiTtsRuntime.class);
+
+            assertThat(client).isInstanceOf(DisabledStreamingTextToSpeechClient.class);
+            assertThat(runtime.streamingEnabled()).isFalse();
         });
     }
 
@@ -170,6 +184,21 @@ class XiaozhiVoiceGatewayBeansTest {
 
                     assertThat(client).isInstanceOf(TencentCloudTextToSpeechClient.class);
                 });
+    }
+
+    @Test
+    void shouldCreateStreamingTencentTtsClientWhenProviderIsTencentStreaming() {
+        contextRunner
+                .withPropertyValues(
+                        "chatbot.voice.tts.provider=tencent-streaming",
+                        "chatbot.voice.tts.tencent.app-id=1300000000",
+                        "chatbot.voice.tts.tencent.secret-id=secret-id",
+                        "chatbot.voice.tts.tencent.secret-key=secret-key",
+                        "chatbot.voice.tts.tencent.voice-type=101001",
+                        "chatbot.voice.default-voice-id=101001"
+                )
+                .run(context -> assertThat(context.getBean(StreamingTextToSpeechClient.class))
+                        .isInstanceOf(TencentCloudStreamingTextToSpeechClient.class));
     }
 
     @Test

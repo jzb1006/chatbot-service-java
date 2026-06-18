@@ -20,6 +20,9 @@ import com.jzb.chatbot.speech.SpeechToTextAudioStream;
 import com.jzb.chatbot.speech.SpeechToTextClient;
 import com.jzb.chatbot.speech.SpeechToTextResult;
 import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
+import com.jzb.chatbot.speech.StreamingTextToSpeechClient;
+import com.jzb.chatbot.speech.StreamingTextToSpeechListener;
+import com.jzb.chatbot.speech.StreamingTextToSpeechSession;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.speech.TextToSpeechOptions;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
@@ -1226,6 +1229,96 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldStartStreamingTtsBeforeHermesStreamCompletes() {
+        var hermes = new FirstChunkThenBlockingHermesClient("第一句内容已经完整。", "第二句稍后也完整。");
+        var streamingTts = new RecordingStreamingTextToSpeechClient();
+        var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
+        var runtime = new XiaozhiTtsRuntime(
+                new FakeTextToSpeechClient(),
+                streamingTts,
+                codec,
+                eventFactory
+        );
+        var serviceWithStreamingTts = newService(new FakeSpeechToTextClient(), hermes, runtime, eventFactory);
+        var session = openSession(serviceWithStreamingTts);
+
+        var turnThread = Thread.startVirtualThread(() -> runSingleTurn(serviceWithStreamingTts, session));
+
+        assertThat(hermes.awaitSecondChunkRequested()).isTrue();
+        assertThat(streamingTts.texts()).containsExactly("第一句内容已经完整。");
+        hermes.release();
+        join(turnThread);
+
+        assertThat(streamingTts.texts()).containsExactly("第一句内容已经完整。", "第二句稍后也完整。");
+        assertThat(serviceWithStreamingTts.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
+    @Test
+    void shouldUseStreamingRuntimeForNotificationWhenStreamingTtsIsEnabled() {
+        var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
+        var streamingTts = new RecordingStreamingTextToSpeechClient();
+        var runtime = new XiaozhiTtsRuntime(
+                new FakeTextToSpeechClient(),
+                streamingTts,
+                codec,
+                eventFactory
+        );
+        var serviceWithStreamingRuntime = newService(
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                runtime,
+                eventFactory
+        );
+        var headers = new HttpHeaders();
+        headers.set("Device-Id", "device-1");
+        var session = new TestWebSocketSession("ws-session-1", URI.create("ws://127.0.0.1/xiaozhi/v1"), headers);
+        serviceWithStreamingRuntime.open(session);
+        serviceWithStreamingRuntime.handleHello(session, new XiaozhiClientHello(
+                "hello",
+                1,
+                Map.of("mcp", true),
+                "websocket",
+                XiaozhiAudioParams.defaults()
+        ));
+
+        var notified = serviceWithStreamingRuntime.notifyDevice("device-1", "提醒时间到了。");
+
+        assertThat(notified).isTrue();
+        assertThat(streamingTts.texts()).containsExactly("提醒时间到了。");
+        assertThat(textPayloads(session))
+                .filteredOn(payload -> payload.contains("\"type\":\"tts\"") && payload.contains("\"state\":\"stop\""))
+                .hasSize(1);
+    }
+
+    @Test
+    void shouldReportTtsFailedWhenStreamingTtsWriteFailsDuringHermesStream() {
+        var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
+        var runtime = new XiaozhiTtsRuntime(
+                new FakeTextToSpeechClient(),
+                new FailingSendStreamingTextToSpeechClient(),
+                codec,
+                eventFactory
+        );
+        var serviceWithFailingStreamingTts = newService(
+                new FakeSpeechToTextClient(),
+                new StreamingHermesClient("第一句内容已经完整。"),
+                runtime,
+                eventFactory
+        );
+        var session = openSession(serviceWithFailingStreamingTts);
+
+        runSingleTurn(serviceWithFailingStreamingTts, session);
+
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"tts_failed\""))
+                .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"hermes_failed\""));
+        assertThat(serviceWithFailingStreamingTts.getSession(session.getId()).state())
+                .isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
+    @Test
     void shouldDelegateNotificationDirectlyToTtsRuntimeRequest() {
         var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
         var ttsRuntime = new CapturingTtsRuntime(codec, eventFactory);
@@ -1880,6 +1973,14 @@ class XiaozhiVoiceSessionServiceTest {
         return service.getSession(session.getId()).state() == XiaozhiVoiceSession.State.IDLE;
     }
 
+    private List<String> textPayloads(TestWebSocketSession session) {
+        return session.getSentMessages().stream()
+                .filter(TextMessage.class::isInstance)
+                .map(TextMessage.class::cast)
+                .map(TextMessage::getPayload)
+                .toList();
+    }
+
     private void assertStreamingPlaybackCancelledBy(
             XiaozhiClientMessage interruptingMessage,
             XiaozhiVoiceSession.State expectedState
@@ -2038,6 +2139,51 @@ class XiaozhiVoiceSessionServiceTest {
 
         private void releaseStreaming() {
             releaseStreaming.countDown();
+        }
+    }
+
+    private static class FirstChunkThenBlockingHermesClient implements HermesClient {
+
+        private final String firstChunk;
+        private final String secondChunk;
+        private final java.util.concurrent.CountDownLatch secondChunkRequested = new java.util.concurrent.CountDownLatch(1);
+        private final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+
+        private FirstChunkThenBlockingHermesClient(String firstChunk, String secondChunk) {
+            this.firstChunk = firstChunk;
+            this.secondChunk = secondChunk;
+        }
+
+        @Override
+        public HermesResponse chat(HermesRequest request, HermesClientConfig config) {
+            return new HermesResponse(request.conversationId(), firstChunk + secondChunk);
+        }
+
+        @Override
+        public Stream<String> streamChat(HermesRequest request, HermesClientConfig config) {
+            return Stream.of(firstChunkEvent(), secondChunkEvent())
+                    .peek(chunk -> {
+                        if (chunk.contains(secondChunk)) {
+                            secondChunkRequested.countDown();
+                            await(release);
+                        }
+                    });
+        }
+
+        private boolean awaitSecondChunkRequested() {
+            return await(secondChunkRequested, Duration.ofSeconds(1));
+        }
+
+        private void release() {
+            release.countDown();
+        }
+
+        private String firstChunkEvent() {
+            return "event: response.output_text.delta\ndata: {\"delta\":\"" + firstChunk + "\"}\n\n";
+        }
+
+        private String secondChunkEvent() {
+            return "event: response.output_text.delta\ndata: {\"delta\":\"" + secondChunk + "\"}\n\n";
         }
     }
 
@@ -2681,6 +2827,100 @@ class XiaozhiVoiceSessionServiceTest {
 
         private int callCount() {
             return callCount.get();
+        }
+    }
+
+    private static class RecordingStreamingTextToSpeechClient implements StreamingTextToSpeechClient {
+
+        private final List<String> texts = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override
+        public StreamingTextToSpeechSession open(
+                TextToSpeechOptions options,
+                StreamingTextToSpeechListener listener
+        ) {
+            listener.onReady();
+            return new RecordingStreamingTextToSpeechSession(listener);
+        }
+
+        private List<String> texts() {
+            return List.copyOf(texts);
+        }
+
+        private final class RecordingStreamingTextToSpeechSession implements StreamingTextToSpeechSession {
+
+            private final StreamingTextToSpeechListener listener;
+            private volatile boolean completed;
+
+            private RecordingStreamingTextToSpeechSession(StreamingTextToSpeechListener listener) {
+                this.listener = listener;
+            }
+
+            @Override
+            public void sendText(String text) {
+                texts.add(text);
+                listener.onAudioFrame(ByteBuffer.wrap(new byte[] {1, 2, 3}));
+            }
+
+            @Override
+            public void complete() {
+                completed = true;
+                listener.onCompleted();
+            }
+
+            @Override
+            public void cancel() {
+                completed = true;
+                listener.onCompleted();
+            }
+
+            @Override
+            public boolean awaitFinal(Duration timeout) {
+                return completed;
+            }
+
+            @Override
+            public void close() {
+                cancel();
+            }
+        }
+    }
+
+    private static class FailingSendStreamingTextToSpeechClient implements StreamingTextToSpeechClient {
+
+        @Override
+        public StreamingTextToSpeechSession open(
+                TextToSpeechOptions options,
+                StreamingTextToSpeechListener listener
+        ) {
+            listener.onReady();
+            return new FailingSendStreamingTextToSpeechSession();
+        }
+    }
+
+    private static class FailingSendStreamingTextToSpeechSession implements StreamingTextToSpeechSession {
+
+        @Override
+        public void sendText(String text) {
+            throw new IllegalStateException("streaming send unavailable");
+        }
+
+        @Override
+        public void complete() {
+        }
+
+        @Override
+        public void cancel() {
+        }
+
+        @Override
+        public boolean awaitFinal(Duration timeout) {
+            return false;
+        }
+
+        @Override
+        public void close() {
+            cancel();
         }
     }
 

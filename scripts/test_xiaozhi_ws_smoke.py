@@ -38,6 +38,19 @@ class XiaozhiWebSocketSmokeTest(unittest.TestCase):
         self.assertEqual("3", fields["tts_sentence_count"])
         self.assertEqual("1", fields["tts_duplicate_sentence_count"])
 
+    def test_smoke_stats_reports_tts_latency_milestones(self):
+        stats = xiaozhi_ws_smoke.SmokeStats()
+        stats.tts_start_at = 1.0
+        stats.first_sentence_start_at = 1.2
+        stats.first_binary_at = 1.5
+        stats.tts_stop_at = 2.0
+
+        fields = dict(stats.fields())
+
+        self.assertEqual("200", fields["first_sentence_start_ms"])
+        self.assertEqual("500", fields["first_binary_ms"])
+        self.assertEqual("1000", fields["tts_total_ms"])
+
 
 if __name__ == "__main__":
     unittest.main()
