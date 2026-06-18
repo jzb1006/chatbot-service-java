@@ -34,6 +34,31 @@ class Frame:
     payload: bytes
 
 
+@dataclass
+class SmokeStats:
+    hello_received: bool = False
+    stt_count: int = 0
+    llm_count: int = 0
+    tts_start_count: int = 0
+    tts_sentence_start_count: int = 0
+    binary_frame_count: int = 0
+    tts_stop_count: int = 0
+    error_count: int = 0
+    first_error: str = ""
+
+    def fields(self) -> list[tuple[str, str]]:
+        return [
+            ("hello_received", format_bool(self.hello_received)),
+            ("stt_count", str(self.stt_count)),
+            ("llm_count", str(self.llm_count)),
+            ("tts_start_count", str(self.tts_start_count)),
+            ("tts_sentence_start_count", str(self.tts_sentence_start_count)),
+            ("binary_frame_count", str(self.binary_frame_count)),
+            ("tts_stop_count", str(self.tts_stop_count)),
+            ("error_count", str(self.error_count)),
+        ]
+
+
 class WebSocketSmokeError(RuntimeError):
     """WebSocket smoke 执行失败。"""
 
@@ -191,7 +216,13 @@ class MinimalWebSocket:
         return None
 
 
-def smoke_url(url: str, args: argparse.Namespace) -> None:
+def smoke_url(url: str, args: argparse.Namespace) -> SmokeStats:
+    stats = run_smoke_url(url, args)
+    print_smoke_stats(stats)
+    return stats
+
+
+def run_smoke_url(url: str, args: argparse.Namespace) -> SmokeStats:
     headers = {
         "Protocol-Version": str(args.protocol_version),
         "Device-Id": args.device_id,
@@ -215,7 +246,8 @@ def smoke_url(url: str, args: argparse.Namespace) -> None:
             },
         })
         server_hello = recv_json_event(websocket, args.timeout)
-        require(server_hello.get("type") == "hello", f"{url}: missing server hello")
+        stats = SmokeStats(hello_received=server_hello.get("type") == "hello")
+        require(stats.hello_received, f"{url}: missing server hello")
 
         websocket.send_text({
             "session_id": server_hello.get("session_id", args.client_id),
@@ -230,12 +262,21 @@ def smoke_url(url: str, args: argparse.Namespace) -> None:
             "state": "stop",
         })
 
-        seen = collect_events_until_tts_stop(websocket, args.timeout)
-        require("stt" in seen, f"{url}: missing stt event")
-        require("llm" in seen, f"{url}: missing llm event")
-        require("tts.start" in seen, f"{url}: missing tts.start event")
-        require("binary" in seen, f"{url}: missing tts binary audio frame")
-        require("tts.stop" in seen, f"{url}: missing tts.stop event")
+        collect_events_until_tts_stop(websocket, args.timeout, stats)
+        require(stats.stt_count >= 1, f"{url}: missing stt event")
+        require(stats.llm_count >= 1, f"{url}: missing llm event")
+        require(stats.tts_start_count == 1, f"{url}: expected one tts.start event, got {stats.tts_start_count}")
+        require(
+            stats.tts_sentence_start_count >= 1,
+            f"{url}: missing tts.sentence_start event",
+        )
+        require(stats.binary_frame_count >= 1, f"{url}: missing tts binary audio frame")
+        require(stats.tts_stop_count == 1, f"{url}: expected one tts.stop event, got {stats.tts_stop_count}")
+        require(
+            stats.error_count == 0,
+            f"{url}: expected no error events, got {stats.error_count}{format_first_error(stats)}",
+        )
+        return stats
 
 
 def recv_json_event(websocket: MinimalWebSocket, timeout: float) -> dict[str, object]:
@@ -248,24 +289,66 @@ def recv_json_event(websocket: MinimalWebSocket, timeout: float) -> dict[str, ob
     raise WebSocketSmokeError("timeout waiting for json event")
 
 
-def collect_events_until_tts_stop(websocket: MinimalWebSocket, timeout: float) -> set[str]:
+def collect_events_until_tts_stop(websocket: MinimalWebSocket, timeout: float, stats: SmokeStats) -> SmokeStats:
     deadline = time.monotonic() + timeout
-    seen: set[str] = set()
     while time.monotonic() < deadline:
         frame = websocket.recv_data_frame()
         if frame.opcode == OPCODE_BINARY:
-            seen.add("binary")
+            stats.binary_frame_count += 1
             continue
-        event = json.loads(frame.payload.decode("utf-8"))
+        try:
+            event = json.loads(frame.payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            stats.error_count += 1
+            raise WebSocketSmokeError(f"invalid text frame json: {exc}") from exc
         event_type = event.get("type")
         state = event.get("state")
-        if event_type == "tts" and state:
-            seen.add(f"tts.{state}")
+        if event_type == "hello":
+            stats.hello_received = True
+        elif event_type == "stt":
+            stats.stt_count += 1
+        elif event_type == "llm":
+            stats.llm_count += 1
+        elif event_type == "error":
+            stats.error_count += 1
+            if not stats.first_error:
+                stats.first_error = summarize_error_event(event)
+        elif event_type == "tts" and state:
+            if state == "start":
+                stats.tts_start_count += 1
+            elif state == "sentence_start":
+                stats.tts_sentence_start_count += 1
+            elif state == "stop":
+                stats.tts_stop_count += 1
             if state == "stop":
-                return seen
-        elif isinstance(event_type, str):
-            seen.add(event_type)
+                return stats
     raise WebSocketSmokeError("timeout waiting for tts.stop")
+
+
+def print_smoke_stats(stats: SmokeStats) -> None:
+    for name, value in stats.fields():
+        print(f"{name}={value}")
+
+
+def format_bool(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def format_first_error(stats: SmokeStats) -> str:
+    if not stats.first_error:
+        return ""
+    return f"; first_error={stats.first_error}"
+
+
+def summarize_error_event(event: dict[str, object]) -> str:
+    code = event.get("code", "")
+    message = event.get("message", "")
+    if not isinstance(code, str):
+        code = json.dumps(code, ensure_ascii=False, separators=(",", ":"))
+    if not isinstance(message, str):
+        message = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
+    summary = f"code={code or '-'} message={message or '-'}"
+    return summary[:300]
 
 
 def resolve_urls(args: argparse.Namespace) -> list[str]:
@@ -291,8 +374,8 @@ def require(condition: bool, message: str) -> None:
         raise WebSocketSmokeError(message)
 
 
-def parse_args(argv: Iterable[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="小智 WebSocket smoke 测试")
+def parse_args(argv: Iterable[str], description: str = "小智 WebSocket smoke 测试") -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--base-url", default="ws://127.0.0.1:8766", help="服务端基础地址")
     parser.add_argument("--url", action="append", help="指定完整 WebSocket URL，可重复传入")
     parser.add_argument("--token", default="", help="设备 token，默认读取 XIAOZHI_WEBSOCKET_TOKEN")

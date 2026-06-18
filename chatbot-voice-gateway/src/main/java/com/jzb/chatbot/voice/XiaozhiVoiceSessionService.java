@@ -2,15 +2,12 @@ package com.jzb.chatbot.voice;
 
 import com.jzb.chatbot.common.id.ConversationId;
 import com.jzb.chatbot.common.id.DeviceId;
-import com.jzb.chatbot.common.id.VoiceId;
 import com.jzb.chatbot.hermes.HermesClient;
 import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.hermes.HermesRequest;
-import com.jzb.chatbot.speech.SpeechToTextAudioStream;
 import com.jzb.chatbot.speech.SpeechToTextClient;
 import com.jzb.chatbot.speech.SpeechToTextResult;
 import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
-import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.voice.hermes.HermesAgentEvent;
 import com.jzb.chatbot.voice.hermes.HermesAgentEventExtractor;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
@@ -21,18 +18,22 @@ import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
 import com.jzb.chatbot.voice.reminder.XiaozhiReminderIntent;
 import com.jzb.chatbot.voice.reminder.XiaozhiReminderRequestedEvent;
+import com.jzb.chatbot.voice.tts.XiaozhiTtsRequest;
+import com.jzb.chatbot.voice.tts.XiaozhiTtsResult;
+import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime;
+import com.jzb.chatbot.voice.tts.XiaozhiVoiceProfileResolver;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BooleanSupplier;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.ApplicationEventPublisherAware;
-import org.springframework.web.socket.TextMessage;
 import org.springframework.stereotype.Service;
+import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
 /**
@@ -45,7 +46,6 @@ import org.springframework.web.socket.WebSocketSession;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAware {
 
     private static final String AUTHORIZATION_HEADER = "Authorization";
@@ -57,7 +57,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     private final XiaozhiMessageCodec codec;
     private final SpeechToTextClient speechToTextClient;
     private final HermesClient hermesClient;
-    private final TextToSpeechClient textToSpeechClient;
+    private final XiaozhiTtsRuntime ttsRuntime;
     private final XiaozhiServerEventFactory eventFactory;
     private final HermesClientConfig hermesClientConfig;
     private final XiaozhiVoiceTokenAuth tokenAuth;
@@ -65,11 +65,40 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     private final XiaozhiAsrMode asrMode;
     private final StreamingSpeechToTextClient streamingSpeechToTextClient;
     private final XiaozhiAudioParams audioParams;
+    private final XiaozhiVoiceProfileResolver voiceProfileResolver;
     private final Map<String, XiaozhiVoiceSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> webSocketSessions = new ConcurrentHashMap<>();
     private final Map<String, String> deviceSessionIds = new ConcurrentHashMap<>();
     private ApplicationEventPublisher eventPublisher = event -> {
     };
+
+    public XiaozhiVoiceSessionService(
+            XiaozhiMessageCodec codec,
+            SpeechToTextClient speechToTextClient,
+            HermesClient hermesClient,
+            XiaozhiTtsRuntime ttsRuntime,
+            XiaozhiServerEventFactory eventFactory,
+            HermesClientConfig hermesClientConfig,
+            XiaozhiVoiceTokenAuth tokenAuth,
+            XiaozhiMcpBridge mcpBridge,
+            XiaozhiAsrMode asrMode,
+            StreamingSpeechToTextClient streamingSpeechToTextClient,
+            XiaozhiAudioParams audioParams,
+            XiaozhiVoiceProfileResolver voiceProfileResolver
+    ) {
+        this.codec = codec;
+        this.speechToTextClient = speechToTextClient;
+        this.hermesClient = hermesClient;
+        this.ttsRuntime = ttsRuntime;
+        this.eventFactory = eventFactory;
+        this.hermesClientConfig = hermesClientConfig;
+        this.tokenAuth = tokenAuth;
+        this.mcpBridge = mcpBridge;
+        this.asrMode = asrMode;
+        this.streamingSpeechToTextClient = streamingSpeechToTextClient;
+        this.audioParams = audioParams;
+        this.voiceProfileResolver = voiceProfileResolver;
+    }
 
     @Override
     public void setApplicationEventPublisher(ApplicationEventPublisher eventPublisher) {
@@ -128,8 +157,8 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         var voiceSession = sessions.remove(session.getId());
         webSocketSessions.remove(session.getId());
         if (voiceSession != null) {
+            cancelCurrentTurnPlayback(voiceSession);
             voiceSession.terminateAsrStream();
-            voiceSession.cancelPlayback();
             deviceSessionIds.computeIfPresent(voiceSession.deviceId(), (key, currentSessionId) ->
                     session.getId().equals(currentSessionId) ? null : currentSessionId);
             mcpBridge.unregister(voiceSession.deviceId(), session.getId());
@@ -176,7 +205,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             return;
         }
         if ("session".equals(message.type()) && "new".equals(message.state())) {
-            voiceSession.cancelPlayback();
+            cancelCurrentTurnPlayback(voiceSession);
             var conversationId = voiceSession.startNewConversation();
             sendText(webSocketSession, eventFactory.session(voiceSession.sessionId(), conversationId));
             log.info("xiaozhi conversation started, sessionId={}, deviceId={}, conversationId={}",
@@ -184,7 +213,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             return;
         }
         if ("session".equals(message.type()) && "clear".equals(message.state())) {
-            voiceSession.cancelPlayback();
+            cancelCurrentTurnPlayback(voiceSession);
             var conversationId = voiceSession.clearConversation();
             sendText(webSocketSession, eventFactory.session(voiceSession.sessionId(), conversationId));
             log.info("xiaozhi conversation cleared, sessionId={}, deviceId={}, conversationId={}",
@@ -192,9 +221,8 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             return;
         }
         if ("abort".equals(message.type())) {
+            cancelCurrentTurnPlayback(voiceSession);
             voiceSession.terminateAsrStream();
-            var playback = voiceSession.cancelPlayback();
-            trySendTtsStop(webSocketSession, voiceSession, playback);
             voiceSession.markIdle();
             log.info("xiaozhi turn aborted, sessionId={}, deviceId={}, reason={}",
                     webSocketSession.getId(), voiceSession.deviceId(), message.reason());
@@ -212,7 +240,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             XiaozhiClientMessage message,
             XiaozhiVoiceSession voiceSession
     ) {
-        voiceSession.cancelPlayback();
+        cancelCurrentTurnPlayback(voiceSession);
         if (asrMode.streaming()) {
             var asrTurn = voiceSession.startAsrStream(audioParams.sampleRate());
             Thread.startVirtualThread(() -> processStreamingTurn(webSocketSession, voiceSession, asrTurn));
@@ -232,8 +260,13 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             }
             return;
         }
-        voiceSession.markProcessing();
-        processSentenceTurn(webSocketSession, voiceSession);
+        var processingAudio = voiceSession.tryDrainAudioFramesForProcessing();
+        if (!processingAudio.accepted()) {
+            log.debug("ignore xiaozhi listen stop outside listening, sessionId={}, deviceId={}, state={}",
+                    webSocketSession.getId(), voiceSession.deviceId(), voiceSession.state());
+            return;
+        }
+        processSentenceTurn(webSocketSession, voiceSession, processingAudio);
     }
 
     /**
@@ -249,7 +282,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             if (asrMode.streaming()) {
                 voiceSession.writeAudioFrameToAsr(frame);
             } else {
-                voiceSession.addAudioFrame(frame);
+                voiceSession.addAudioFrameIfListening(frame);
             }
             return;
         }
@@ -278,53 +311,55 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             deviceSessionIds.remove(deviceId, sessionId);
             return false;
         }
-        if (voiceSession.state() != XiaozhiVoiceSession.State.IDLE) {
+        var playbackGeneration = voiceSession.tryBeginNotificationPlayback();
+        if (playbackGeneration < 0) {
             log.info("xiaozhi notification skipped because session is busy, sessionId={}, deviceId={}, state={}",
                     sessionId, deviceId, voiceSession.state());
             return false;
         }
-        var playback = new XiaozhiTtsPlayback(webSocketSession, voiceSession, codec, eventFactory);
-        if (!voiceSession.startNotificationPlayback(playback)) {
-            return false;
-        }
-        var turnGuard = new TurnGuard(() -> voiceSession.hasPlayback(playback));
-        if (!sendPlaybackText(webSocketSession, voiceSession, turnGuard, playback,
-                eventFactory.llmEmotion(voiceSession.sessionId(), "neutral"))) {
-            return false;
-        }
-        if (!sendPlaybackText(webSocketSession, voiceSession, turnGuard, playback,
-                eventFactory.ttsStart(voiceSession.sessionId()))) {
-            return false;
-        }
-        var sent = false;
+        var ttsStartedAt = System.nanoTime();
         try {
-            sent = speakSentences(
+            var profile = voiceProfileResolver.resolve(voiceSession.deviceId());
+            return ttsRuntime.speak(new XiaozhiTtsRequest(
                     webSocketSession,
                     voiceSession,
-                    turnGuard,
-                    playback,
                     List.of(text),
-                    System.nanoTime()
+                    profile.toTtsOptions(),
+                    playbackGeneration,
+                    () -> notificationCancelled(webSocketSession, voiceSession, playbackGeneration)
+            ));
+        } catch (RuntimeException exception) {
+            handleNotificationTtsFailure(
+                    webSocketSession, voiceSession, playbackGeneration, ttsStartedAt, "语音合成失败", exception
             );
+            return false;
         } finally {
-            finishNotification(webSocketSession, voiceSession, playback);
+            voiceSession.completePlayback(playbackGeneration);
         }
-        return sent;
     }
 
-    private void processSentenceTurn(WebSocketSession webSocketSession, XiaozhiVoiceSession voiceSession) {
+    private void processSentenceTurn(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiVoiceSession.ProcessingAudio processingAudio
+    ) {
+        var turnGeneration = processingAudio.turnGeneration();
         try {
-            var audioFrames = voiceSession.drainAudioFrames().stream()
+            var audioFrames = processingAudio.frames().stream()
                     .map(frame -> ByteBuffer.wrap(frame.payload()))
                     .toList();
             var audioFrameCount = audioFrames.size();
             var asrStartedAt = System.nanoTime();
-            var transcription = transcribe(webSocketSession, voiceSession, audioFrames, asrStartedAt);
+            var transcription = transcribe(webSocketSession, voiceSession, turnGeneration, audioFrames, asrStartedAt);
             var asrMillis = elapsedMillis(asrStartedAt);
             if (transcription.failed()) {
                 return;
             }
             var userText = transcription.text();
+            if (turnCancelled(webSocketSession, voiceSession, turnGeneration)) {
+                cancelTurnBeforeRuntime(webSocketSession, voiceSession, "", asrMillis);
+                return;
+            }
             if (userText == null || userText.isBlank()) {
                 log.warn("xiaozhi asr returned blank text, sessionId={}, deviceId={}, asrProvider={}, audioFrames={}, asrMillis={}",
                         webSocketSession.getId(),
@@ -332,32 +367,39 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         transcription.provider(),
                         audioFrameCount,
                         asrMillis);
-                trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "asr_empty", "未识别到语音"));
-                voiceSession.markIdle();
+                trySendTurnErrorIfActive(webSocketSession, voiceSession, turnGeneration, "asr_empty", "未识别到语音");
+                voiceSession.markIdleIfTurnActive(turnGeneration);
                 return;
             }
             sendText(webSocketSession, eventFactory.stt(voiceSession.sessionId(), userText));
-
-            var turnStartedAt = System.nanoTime();
-            var conversationId = voiceSession.conversationId();
+            if (turnCancelled(webSocketSession, voiceSession, turnGeneration)) {
+                cancelTurnBeforeRuntime(webSocketSession, voiceSession, "", asrMillis);
+                return;
+            }
+            var reminderIntent = XiaozhiReminderIntent.parse(userText);
+            if (reminderIntent != null) {
+                scheduleReminder(webSocketSession, voiceSession, turnGeneration, reminderIntent, asrMillis);
+                return;
+            }
             var result = streamChatAndSpeak(
                     webSocketSession,
                     voiceSession,
                     TurnGuard.none(),
                     voiceSession.deviceId(),
-                    conversationId,
+                    voiceSession.conversationId(),
+                    turnGeneration,
                     userText,
                     audioFrameCount,
                     asrMillis,
-                    turnStartedAt
+                    SENTENCE_ASR_PROVIDER
             );
-            if (result.failed()) {
+            if (!result.completed()) {
                 return;
             }
             log.info("xiaozhi conversation turn, sessionId={}, deviceId={}, conversationId={}, asrProvider={}, asrMillis={}, userText={}, assistantText={}",
                     webSocketSession.getId(),
                     voiceSession.deviceId(),
-                    conversationId,
+                    voiceSession.conversationId(),
                     transcription.provider(),
                     asrMillis,
                     userText,
@@ -365,7 +407,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         } catch (RuntimeException exception) {
             log.warn("xiaozhi turn failed, sessionId={}, deviceId={}, message={}",
                     webSocketSession.getId(), voiceSession.deviceId(), exception.getMessage(), exception);
-            voiceSession.markIdle();
+            voiceSession.markIdleIfTurnActive(turnGeneration);
         }
     }
 
@@ -391,8 +433,13 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         voiceSession.deviceId(),
                         provider(result),
                         asrMillis);
-                trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "asr_empty", "未识别到语音"));
-                voiceSession.markIdle();
+                trySendAsrTurnText(
+                        webSocketSession,
+                        voiceSession,
+                        asrTurn,
+                        eventFactory.error(voiceSession.sessionId(), "asr_empty", "未识别到语音")
+                );
+                voiceSession.markIdleIfAsrTurn(asrTurn);
                 return;
             }
             if (!sendAsrTurnText(
@@ -403,20 +450,19 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             )) {
                 return;
             }
-
-            var turnStartedAt = System.nanoTime();
             var turnResult = streamChatAndSpeak(
                     webSocketSession,
                     voiceSession,
                     new TurnGuard(() -> voiceSession.isCurrentAsrTurn(asrTurn)),
                     asrTurn.deviceId(),
                     asrTurn.conversationId(),
+                    asrTurn.turnGeneration(),
                     userText,
                     0,
                     asrMillis,
-                    turnStartedAt
+                    provider(result)
             );
-            if (turnResult.failed()) {
+            if (!turnResult.completed()) {
                 return;
             }
             log.info("xiaozhi streaming conversation turn, sessionId={}, deviceId={}, conversationId={}, asrProvider={}, asrMillis={}, userText={}, assistantText={}",
@@ -453,75 +499,51 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     private void scheduleReminder(
             WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
+            long turnGeneration,
             XiaozhiReminderIntent reminderIntent,
-            int audioFrameCount,
             long asrMillis
     ) {
-        publishReminderRequest(voiceSession, reminderIntent);
-        var turnStartedAt = System.nanoTime();
-        var ttsStartedAt = System.nanoTime();
-        var playback = new XiaozhiTtsPlayback(webSocketSession, voiceSession, codec, eventFactory);
-        if (!voiceSession.startPlaybackIfActive(
-                playback,
-                () -> voiceSession.state() == XiaozhiVoiceSession.State.PROCESSING
-        )) {
+        if (turnCancelled(webSocketSession, voiceSession, turnGeneration)) {
+            cancelTurnBeforeRuntime(webSocketSession, voiceSession, "", asrMillis);
             return;
         }
-        var turnGuard = new TurnGuard(() -> voiceSession.hasPlayback(playback));
-        try {
-            if (!sendPlaybackText(webSocketSession, voiceSession, turnGuard, playback,
-                    eventFactory.llmEmotion(voiceSession.sessionId(), "neutral"))) {
-                return;
-            }
-            if (!sendPlaybackText(webSocketSession, voiceSession, turnGuard, playback,
-                    eventFactory.ttsStart(voiceSession.sessionId()))) {
-                return;
-            }
-            speakSentences(
-                    webSocketSession,
-                    voiceSession,
-                    turnGuard,
-                    playback,
-                    List.of(reminderIntent.confirmationText()),
-                    ttsStartedAt
-            );
-            finishPlayback(
-                    webSocketSession,
-                    voiceSession,
-                    turnGuard,
-                    playback,
-                    audioFrameCount,
-                    asrMillis,
-                    turnStartedAt,
-                    ttsStartedAt
-            );
-            log.info("xiaozhi reminder scheduled, sessionId={}, deviceId={}, delaySeconds={}, message={}",
-                    webSocketSession.getId(), voiceSession.deviceId(), reminderIntent.delaySeconds(), reminderIntent.message());
-        } finally {
-            voiceSession.markIdleIfPlayback(playback);
-        }
-    }
-
-    private void publishReminderRequest(
-            XiaozhiVoiceSession voiceSession,
-            XiaozhiReminderIntent reminderIntent
-    ) {
-        eventPublisher.publishEvent(new XiaozhiReminderRequestedEvent(
-                voiceSession.deviceId(),
-                reminderIntent.message(),
-                reminderIntent.delaySeconds()
-        ));
+        publishReminderRequest(voiceSession, reminderIntent);
+        var ttsOperationStartedAt = System.nanoTime();
+        var playbackResult = speakWithRuntime(
+                webSocketSession,
+                voiceSession,
+                turnGeneration,
+                TurnGuard.none(),
+                List.of(reminderIntent.confirmationText()),
+                ttsOperationStartedAt,
+                "语音合成失败"
+        );
+        logTurnCompleted(
+                webSocketSession,
+                voiceSession,
+                playbackResult,
+                SENTENCE_ASR_PROVIDER,
+                asrMillis,
+                0,
+                playbackResult.ttsMillis()
+        );
+        log.info("xiaozhi reminder scheduled, sessionId={}, deviceId={}, delaySeconds={}, message={}",
+                webSocketSession.getId(), voiceSession.deviceId(), reminderIntent.delaySeconds(), reminderIntent.message());
     }
 
     private Transcription transcribe(
             WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
+            long turnGeneration,
             List<ByteBuffer> audioFrames,
             long asrStartedAt
     ) {
         try {
             return new Transcription(speechToTextClient.transcribe(audioFrames), SENTENCE_ASR_PROVIDER, false);
         } catch (RuntimeException exception) {
+            if (turnCancelled(webSocketSession, voiceSession, turnGeneration)) {
+                return new Transcription(null, SENTENCE_ASR_PROVIDER, true);
+            }
             log.warn("xiaozhi asr failed, sessionId={}, deviceId={}, asrProvider={}, asrMillis={}, message={}",
                     webSocketSession.getId(),
                     voiceSession.deviceId(),
@@ -529,8 +551,8 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                     elapsedMillis(asrStartedAt),
                     exception.getMessage(),
                     exception);
-            trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "asr_failed", "语音识别失败"));
-            voiceSession.markIdle();
+            trySendTurnErrorIfActive(webSocketSession, voiceSession, turnGeneration, "asr_failed", "语音识别失败");
+            voiceSession.markIdleIfTurnActive(turnGeneration);
             return new Transcription(null, SENTENCE_ASR_PROVIDER, true);
         }
     }
@@ -541,118 +563,114 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             TurnGuard turnGuard,
             String deviceId,
             String conversationId,
+            long turnGeneration,
             String userText,
             int audioFrameCount,
             long asrMillis,
-            long turnStartedAt
+            String asrProvider
     ) {
         if (!turnGuard.active()) {
             return TurnResult.cancelled("");
         }
-        var playback = new XiaozhiTtsPlayback(webSocketSession, voiceSession, codec, eventFactory);
+        var extractor = new XiaozhiHermesStreamTextExtractor();
+        var eventExtractor = new HermesAgentEventExtractor();
+        var segmenter = new XiaozhiSentenceSegmenter();
+        var reply = new StringBuilder();
+        var sentences = new ArrayList<String>();
+        var hermesStartedAt = System.nanoTime();
+        String reminderConfirmationText = null;
         try {
-            if (!voiceSession.startPlaybackIfActive(playback, turnGuard::active)) {
-                return TurnResult.cancelled("");
-            }
-            if (playback.cancelled() || !turnGuard.active()) {
-                return TurnResult.cancelled("");
-            }
-            if (!sendPlaybackText(webSocketSession, voiceSession, turnGuard, playback,
-                    eventFactory.llmEmotion(voiceSession.sessionId(), "neutral"))) {
-                return TurnResult.cancelled("");
-            }
-            if (!sendPlaybackText(webSocketSession, voiceSession, turnGuard, playback,
-                    eventFactory.ttsStart(voiceSession.sessionId()))) {
-                return TurnResult.cancelled("");
-            }
-            var extractor = new XiaozhiHermesStreamTextExtractor();
-            var eventExtractor = new HermesAgentEventExtractor();
-            var segmenter = new XiaozhiSentenceSegmenter();
-            var reply = new StringBuilder();
-            String reminderConfirmationText = null;
-            var ttsStartedAt = System.nanoTime();
             try (var chunks = hermesClient.streamChat(new HermesRequest(
                     new DeviceId(deviceId),
                     new ConversationId(conversationId),
                     userText
             ), hermesClientConfig)) {
                 for (var chunk : (Iterable<String>) chunks::iterator) {
-                    if (playback.cancelled() || !turnGuard.active()) {
-                        break;
+                    if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
+                        return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
                     }
                     for (var event : eventExtractor.accept(chunk)) {
-                        var confirmationText = handleHermesAgentEvent(
-                                webSocketSession,
-                                voiceSession,
-                                turnGuard,
-                                event,
-                                audioFrameCount,
-                                asrMillis
-                        );
+                        var confirmationText = handleHermesAgentEvent(voiceSession, turnGuard, event);
                         if (reminderConfirmationText == null && confirmationText != null && !confirmationText.isBlank()) {
                             reminderConfirmationText = confirmationText;
                         }
                     }
-                    if (playback.cancelled() || !turnGuard.active()) {
-                        break;
+                    if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
+                        return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
                     }
                     for (var text : extractor.accept(chunk)) {
-                        reply.append(text);
-                        if (!speakSentences(webSocketSession, voiceSession, turnGuard, playback, segmenter.accept(text), ttsStartedAt)) {
-                            return TurnResult.cancelled(reply.toString());
+                        if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
+                            return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
                         }
+                        reply.append(text);
+                        sentences.addAll(segmenter.accept(text));
                     }
                 }
             }
             for (var text : extractor.flush()) {
-                reply.append(text);
-                if (!speakSentences(webSocketSession, voiceSession, turnGuard, playback, segmenter.accept(text), ttsStartedAt)) {
-                    return TurnResult.cancelled(reply.toString());
+                if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
+                    return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
                 }
+                reply.append(text);
+                sentences.addAll(segmenter.accept(text));
             }
             var finalSentence = segmenter.flush();
-            if (!finalSentence.isBlank()
-                    && !speakSentences(webSocketSession, voiceSession, turnGuard, playback, List.of(finalSentence), ttsStartedAt)) {
-                return TurnResult.cancelled(reply.toString());
+            if (!finalSentence.isBlank()) {
+                sentences.add(finalSentence);
             }
             if (reply.toString().isBlank() && reminderConfirmationText != null && !reminderConfirmationText.isBlank()) {
                 reply.append(reminderConfirmationText);
-                if (!speakSentences(webSocketSession, voiceSession, turnGuard, playback, List.of(reminderConfirmationText), ttsStartedAt)) {
-                    return TurnResult.cancelled(reply.toString());
-                }
+                sentences.add(reminderConfirmationText);
             }
-            finishPlayback(webSocketSession, voiceSession, turnGuard, playback, audioFrameCount, asrMillis, turnStartedAt, ttsStartedAt);
+            if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
+                return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
+            }
+            var hermesMillis = elapsedMillis(hermesStartedAt);
+            var ttsOperationStartedAt = System.nanoTime();
+            var playbackResult = speakWithRuntime(
+                    webSocketSession,
+                    voiceSession,
+                    turnGeneration,
+                    turnGuard,
+                    sentences,
+                    ttsOperationStartedAt,
+                    "语音合成失败"
+            );
+            logTurnCompleted(
+                    webSocketSession,
+                    voiceSession,
+                    playbackResult,
+                    asrProvider,
+                    asrMillis,
+                    hermesMillis,
+                    playbackResult.ttsMillis()
+            );
+            if (playbackResult.failed()) {
+                return TurnResult.failure();
+            }
+            if (playbackResult.cancelled()) {
+                return TurnResult.cancelled(reply.toString());
+            }
             return TurnResult.completed(reply.toString());
         } catch (RuntimeException exception) {
-            if (!turnGuard.active()) {
-                return TurnResult.cancelled("");
+            if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
+                return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
             }
             log.warn("xiaozhi hermes failed, sessionId={}, deviceId={}, message={}",
                     webSocketSession.getId(),
                     deviceId,
                     exception.getMessage(),
                     exception);
-            trySendPlaybackFailure(
-                    webSocketSession,
-                    voiceSession,
-                    turnGuard,
-                    playback,
-                    "hermes_failed",
-                    "对话服务失败"
-            );
+            trySendTurnErrorIfActive(webSocketSession, voiceSession, turnGeneration, "hermes_failed", "对话服务失败");
+            voiceSession.markIdleIfTurnActive(turnGeneration);
             return TurnResult.failure();
-        } finally {
-            voiceSession.clearPlayback(playback);
         }
     }
 
     private String handleHermesAgentEvent(
-            WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
             TurnGuard turnGuard,
-            HermesAgentEvent event,
-            int audioFrameCount,
-            long asrMillis
+            HermesAgentEvent event
     ) {
         if (!turnGuard.active() || !"create_reminder".equals(event.action())) {
             return null;
@@ -666,167 +684,208 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         return turnGuard.active() ? reminderIntent.confirmationText() : null;
     }
 
-    private boolean speakSentences(
-            WebSocketSession webSocketSession,
+    private void publishReminderRequest(
             XiaozhiVoiceSession voiceSession,
-            TurnGuard turnGuard,
-            XiaozhiTtsPlayback playback,
-            List<String> sentences,
-            long ttsStartedAt
+            XiaozhiReminderIntent reminderIntent
     ) {
-        for (var sentence : sentences) {
-            if (sentence == null || sentence.isBlank()) {
-                continue;
-            }
-            if (!turnGuard.active()) {
-                return false;
-            }
-            try {
-                var synthesizedFrames = textToSpeechClient.synthesize(sentence, new VoiceId("default"));
-                if (!turnGuard.active()) {
-                    return false;
-                }
-                if (!playback.playSentence(sentence, synthesizedFrames, turnGuard::active)) {
-                    return false;
-                }
-            } catch (RuntimeException exception) {
-                if (!turnGuard.active()) {
-                    return false;
-                }
-                log.warn("xiaozhi tts failed, sessionId={}, deviceId={}, ttsMillis={}, message={}",
-                        webSocketSession.getId(),
-                        voiceSession.deviceId(),
-                        elapsedMillis(ttsStartedAt),
-                        exception.getMessage(),
-                        exception);
-                trySendPlaybackFailure(
-                        webSocketSession,
-                        voiceSession,
-                        turnGuard,
-                        playback,
-                        "tts_failed",
-                        "语音合成失败"
-                );
-                return false;
-            } catch (IOException exception) {
-                if (!turnGuard.active()) {
-                    return false;
-                }
-                log.warn("xiaozhi tts audio send failed, sessionId={}, deviceId={}, message={}",
-                        webSocketSession.getId(), voiceSession.deviceId(), exception.getMessage(), exception);
-                trySendPlaybackFailure(
-                        webSocketSession,
-                        voiceSession,
-                        turnGuard,
-                        playback,
-                        "tts_failed",
-                        "语音下发失败"
-                );
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private void finishPlayback(
-            WebSocketSession webSocketSession,
-            XiaozhiVoiceSession voiceSession,
-            TurnGuard turnGuard,
-            XiaozhiTtsPlayback playback,
-            int audioFrameCount,
-            long asrMillis,
-            long turnStartedAt,
-            long ttsStartedAt
-    ) {
-        if (playback.cancelled() || !turnGuard.active() || !voiceSession.hasPlayback(playback)) {
-            return;
-        }
-        if (!sendPlaybackTtsStop(webSocketSession, voiceSession, turnGuard, playback)) {
-            return;
-        }
-        if (playback.cancelled() || !turnGuard.active() || !voiceSession.hasPlayback(playback)) {
-            return;
-        }
-        log.info("xiaozhi turn completed, sessionId={}, deviceId={}, audioFrames={}, ttsFrames={}, asrMillis={}, hermesMillis={}, ttsMillis={}",
-                webSocketSession.getId(),
+        eventPublisher.publishEvent(new XiaozhiReminderRequestedEvent(
                 voiceSession.deviceId(),
-                audioFrameCount,
-                playback.sentFrames(),
-                asrMillis,
-                elapsedMillis(turnStartedAt),
-                elapsedMillis(ttsStartedAt));
-        voiceSession.markIdleIfPlayback(playback);
+                reminderIntent.message(),
+                reminderIntent.delaySeconds()
+        ));
     }
 
-    private void finishNotification(
+    private PlaybackResult speakWithRuntime(
             WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
-            XiaozhiTtsPlayback playback
-    ) {
-        var turnGuard = new TurnGuard(() -> voiceSession.hasPlayback(playback));
-        sendPlaybackTtsStop(webSocketSession, voiceSession, turnGuard, playback);
-        voiceSession.markIdleIfPlayback(playback);
-    }
-
-    private void trySendTtsStop(
-            WebSocketSession webSocketSession,
-            XiaozhiVoiceSession voiceSession,
-            XiaozhiTtsPlayback playback
-    ) {
-        if (playback != null && !playback.markStopSent()) {
-            return;
-        }
-        trySendText(webSocketSession, eventFactory.ttsStop(voiceSession.sessionId()));
-    }
-
-    private boolean sendPlaybackText(
-            WebSocketSession webSocketSession,
-            XiaozhiVoiceSession voiceSession,
+            long turnGeneration,
             TurnGuard turnGuard,
-            XiaozhiTtsPlayback playback,
-            String payload
+            List<String> sentences,
+            long ttsStartedAt,
+            String errorMessage
     ) {
         try {
-            if (!turnGuard.active() || !voiceSession.hasPlayback(playback)) {
-                playback.cancel();
-                return false;
+            var profile = voiceProfileResolver.resolve(voiceSession.deviceId());
+            if (cancelledBeforeRuntime(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
+                return PlaybackResult.cancelledBeforeRuntime();
             }
-            webSocketSession.sendMessage(new TextMessage(payload));
-            return turnGuard.active() && voiceSession.hasPlayback(playback);
-        } catch (IOException exception) {
-            throw new IllegalStateException("Failed to send xiaozhi playback websocket message", exception);
+            var runtimeStartedAt = System.nanoTime();
+            var result = ttsRuntime.play(new XiaozhiTtsRequest(
+                    webSocketSession,
+                    voiceSession,
+                    sentences,
+                    profile.toTtsOptions(),
+                    () -> cancelledBeforeRuntime(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()
+            ));
+            var ttsMillis = elapsedMillis(runtimeStartedAt);
+            if (result.cancelled()) {
+                return PlaybackResult.cancelled(result, ttsMillis);
+            }
+            return result.played() ? PlaybackResult.completed(result, ttsMillis) : PlaybackResult.cancelled(result, ttsMillis);
+        } catch (RuntimeException exception) {
+            handleTurnTtsFailure(webSocketSession, voiceSession, turnGeneration, ttsStartedAt, errorMessage, exception);
+            return PlaybackResult.FAILED;
         }
     }
 
-    private boolean sendPlaybackTtsStop(
+    private TurnResult cancelTurnBeforeRuntime(
             WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
-            TurnGuard turnGuard,
-            XiaozhiTtsPlayback playback
+            String reply,
+            long asrMillis
     ) {
-        if (!playback.markStopSent()) {
-            return true;
-        }
-        return sendPlaybackText(webSocketSession, voiceSession, turnGuard, playback, eventFactory.ttsStop(voiceSession.sessionId()));
+        logTurnCompleted(
+                webSocketSession,
+                voiceSession,
+                PlaybackResult.cancelledBeforeRuntime(),
+                "unknown",
+                asrMillis,
+                0,
+                0
+        );
+        return TurnResult.cancelled(reply);
     }
 
-    private void trySendPlaybackFailure(
+    private TurnResult cancelTurnBeforeRuntime(
             WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
-            TurnGuard turnGuard,
-            XiaozhiTtsPlayback playback,
+            String reply,
+            long asrMillis,
+            long hermesStartedAt
+    ) {
+        logTurnCompleted(
+                webSocketSession,
+                voiceSession,
+                PlaybackResult.cancelledBeforeRuntime(),
+                "unknown",
+                asrMillis,
+                elapsedMillis(hermesStartedAt),
+                0
+        );
+        return TurnResult.cancelled(reply);
+    }
+
+    private void logTurnCompleted(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            PlaybackResult playbackResult,
+            String asrProvider,
+            long asrMillis,
+            long hermesMillis,
+            long ttsMillis
+    ) {
+        var ttsResult = playbackResult.ttsResult();
+        if (ttsResult == null) {
+            return;
+        }
+        log.info("xiaozhi turn completed, sessionId={}, deviceId={}, conversationId={}, asrProvider={}, sentenceCount={}, ttsFrames={}, asrMillis={}, hermesMillis={}, ttsMillis={}, cancelled={}",
+                webSocketSession.getId(),
+                voiceSession.deviceId(),
+                voiceSession.conversationId(),
+                asrProvider,
+                ttsResult.sentenceCount(),
+                ttsResult.ttsFrames(),
+                asrMillis,
+                hermesMillis,
+                ttsMillis,
+                ttsResult.cancelled());
+    }
+
+    private boolean turnCancelled(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long turnGeneration
+    ) {
+        return cancelledBeforeRuntime(webSocketSession, voiceSession, turnGeneration);
+    }
+
+    private void handleNotificationTtsFailure(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long playbackGeneration,
+            long ttsStartedAt,
+            String errorMessage,
+            RuntimeException exception
+    ) {
+        sendTtsFailure(webSocketSession, voiceSession, ttsStartedAt, errorMessage, exception);
+        voiceSession.completePlayback(playbackGeneration);
+    }
+
+    private void handleTurnTtsFailure(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long turnGeneration,
+            long ttsStartedAt,
+            String errorMessage,
+            RuntimeException exception
+    ) {
+        logTtsFailure(webSocketSession, voiceSession, ttsStartedAt, exception);
+        if (sessions.get(webSocketSession.getId()) == voiceSession) {
+            voiceSession.runIfRegularTurnNotCancelled(turnGeneration, () ->
+                    trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "tts_failed", errorMessage)));
+        }
+        voiceSession.markIdleIfTurnActive(turnGeneration);
+    }
+
+    private void sendTtsFailure(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long ttsStartedAt,
+            String errorMessage,
+            RuntimeException exception
+    ) {
+        logTtsFailure(webSocketSession, voiceSession, ttsStartedAt, exception);
+        trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), "tts_failed", errorMessage));
+    }
+
+    private void logTtsFailure(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long ttsStartedAt,
+            RuntimeException exception
+    ) {
+        log.warn("xiaozhi tts failed, sessionId={}, deviceId={}, ttsMillis={}, message={}",
+                webSocketSession.getId(),
+                voiceSession.deviceId(),
+                elapsedMillis(ttsStartedAt),
+                exception.getMessage(),
+                exception);
+    }
+
+    private boolean cancelledBeforeRuntime(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long turnGeneration
+    ) {
+        return voiceSession.regularTurnCancelled(turnGeneration) || sessions.get(webSocketSession.getId()) != voiceSession;
+    }
+
+    private void cancelCurrentTurnPlayback(XiaozhiVoiceSession voiceSession) {
+        voiceSession.requestAbort();
+        ttsRuntime.cancel(voiceSession.sessionId());
+        voiceSession.cancelPlayback();
+    }
+
+    private void trySendTurnErrorIfActive(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long turnGeneration,
             String code,
             String message
     ) {
-        sendPlaybackTtsStop(webSocketSession, voiceSession, turnGuard, playback);
-        sendPlaybackText(
-                webSocketSession,
-                voiceSession,
-                turnGuard,
-                playback,
-                eventFactory.error(voiceSession.sessionId(), code, message)
-        );
-        voiceSession.markIdleIfPlayback(playback);
+        if (!turnCancelled(webSocketSession, voiceSession, turnGeneration)) {
+            trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), code, message));
+        }
+    }
+
+    private boolean notificationCancelled(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long playbackGeneration
+    ) {
+        return sessions.get(webSocketSession.getId()) != voiceSession
+                || !webSocketSession.getId().equals(deviceSessionIds.get(voiceSession.deviceId()))
+                || !voiceSession.playbackActive(playbackGeneration);
     }
 
     private boolean sendAsrTurnText(
@@ -921,18 +980,67 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         }
     }
 
-    private record TurnResult(String reply, boolean failed) {
+    private record PlaybackResult(Status status, XiaozhiTtsResult ttsResult, long ttsMillis) {
+
+        private enum Status {
+            COMPLETED,
+            CANCELLED,
+            FAILED
+        }
+
+        private static final PlaybackResult FAILED = new PlaybackResult(Status.FAILED, null, 0);
+
+        private static PlaybackResult completed(XiaozhiTtsResult ttsResult, long ttsMillis) {
+            return new PlaybackResult(Status.COMPLETED, ttsResult, ttsMillis);
+        }
+
+        private static PlaybackResult cancelled(XiaozhiTtsResult ttsResult, long ttsMillis) {
+            return new PlaybackResult(Status.CANCELLED, ttsResult, ttsMillis);
+        }
+
+        private static PlaybackResult cancelledBeforeRuntime() {
+            return new PlaybackResult(Status.CANCELLED, new XiaozhiTtsResult(false, 0, 0, true), 0);
+        }
+
+        private boolean completed() {
+            return status == Status.COMPLETED;
+        }
+
+        private boolean cancelled() {
+            return status == Status.CANCELLED;
+        }
+
+        private boolean failed() {
+            return status == Status.FAILED;
+        }
+    }
+
+    private record TurnResult(String reply, Status status) {
+
+        private enum Status {
+            COMPLETED,
+            CANCELLED,
+            FAILED
+        }
 
         private static TurnResult completed(String reply) {
-            return new TurnResult(reply, false);
+            return new TurnResult(reply, Status.COMPLETED);
         }
 
         private static TurnResult cancelled(String reply) {
-            return new TurnResult(reply, false);
+            return new TurnResult(reply, Status.CANCELLED);
         }
 
         private static TurnResult failure() {
-            return new TurnResult("", true);
+            return new TurnResult("", Status.FAILED);
+        }
+
+        private boolean completed() {
+            return status == Status.COMPLETED;
+        }
+
+        private boolean failed() {
+            return status == Status.FAILED;
         }
     }
 }

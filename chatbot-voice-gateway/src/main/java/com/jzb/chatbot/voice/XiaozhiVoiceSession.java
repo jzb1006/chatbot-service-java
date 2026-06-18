@@ -18,6 +18,8 @@ import java.util.function.BooleanSupplier;
  */
 public class XiaozhiVoiceSession {
 
+    private static final long NO_PLAYBACK_GENERATION = -1L;
+
     /**
      * 语音会话状态。
      */
@@ -40,6 +42,10 @@ public class XiaozhiVoiceSession {
     private long asrTurnSequence;
     private AsrTurn asrTurn;
     private volatile XiaozhiTtsPlayback playback;
+    private volatile long turnGeneration;
+    private volatile long abortedTurnGeneration = -1;
+    private long playbackGeneration;
+    private long activePlaybackGeneration = NO_PLAYBACK_GENERATION;
 
     public XiaozhiVoiceSession(String sessionId) {
         this.sessionId = sessionId;
@@ -77,22 +83,22 @@ public class XiaozhiVoiceSession {
     }
 
     public synchronized String startNewConversation() {
+        requestAbortLocked();
         cancelPlaybackLocked();
         terminateAsrStreamLocked();
         conversationSequence++;
         conversationId = defaultConversationId() + "-" + sessionId + "-" + conversationSequence;
-        audioFrames.clear();
-        state = State.IDLE;
+        markIdleInternal();
         return conversationId;
     }
 
     public synchronized String clearConversation() {
+        requestAbortLocked();
         cancelPlaybackLocked();
         terminateAsrStreamLocked();
         conversationId = defaultConversationId();
         conversationSequence = 0;
-        audioFrames.clear();
-        state = State.IDLE;
+        markIdleInternal();
         return conversationId;
     }
 
@@ -107,37 +113,62 @@ public class XiaozhiVoiceSession {
         updateProtocolVersion(protocolVersion);
     }
 
-    public synchronized void markListening() {
+    public synchronized long markListening() {
         cancelPlaybackLocked();
         terminateAsrStreamLocked();
+        turnGeneration++;
+        activePlaybackGeneration = NO_PLAYBACK_GENERATION;
         state = State.LISTENING;
         audioFrames.clear();
+        return turnGeneration;
     }
 
     public synchronized AsrTurn startAsrStream(int sampleRate) {
         cancelPlaybackLocked();
         terminateAsrStreamLocked();
+        turnGeneration++;
+        activePlaybackGeneration = NO_PLAYBACK_GENERATION;
         asrTurn = new AsrTurn(
                 ++asrTurnSequence,
+                turnGeneration,
                 deviceId(),
                 conversationId(),
                 new SpeechToTextAudioStream(),
                 new StreamingOpusToPcmDecoder(sampleRate)
         );
         state = State.LISTENING;
+        audioFrames.clear();
         return asrTurn;
     }
 
-    public synchronized void markProcessing() {
+    public synchronized long markProcessing() {
+        activePlaybackGeneration = NO_PLAYBACK_GENERATION;
         state = State.PROCESSING;
-    }
-
-    public synchronized void markSpeaking() {
-        state = State.SPEAKING;
+        return turnGeneration;
     }
 
     /**
-     * 在会话仍处于空闲状态时注册播放控制器并进入播报状态。
+     * 仅当当前处于监听态时，原子切换到处理态并取出已缓存音频帧。
+     *
+     * @return 处理音频帧快照，accepted 为 false 表示当前状态不接受 stop
+     */
+    public synchronized ProcessingAudio tryDrainAudioFramesForProcessing() {
+        if (state != State.LISTENING) {
+            return new ProcessingAudio(turnGeneration, List.of(), false);
+        }
+        activePlaybackGeneration = NO_PLAYBACK_GENERATION;
+        state = State.PROCESSING;
+        var frames = List.copyOf(audioFrames);
+        audioFrames.clear();
+        return new ProcessingAudio(turnGeneration, frames, true);
+    }
+
+    public synchronized long markSpeaking() {
+        return beginRuntimePlayback();
+    }
+
+    /**
+     * 在会话仍处于空闲状态时注册旧式播放控制器并进入播报状态。
      *
      * @param playback 播放控制器
      * @return true 表示已注册播放控制器
@@ -148,14 +179,109 @@ public class XiaozhiVoiceSession {
             return false;
         }
         this.playback = playback;
-        state = State.SPEAKING;
+        beginSpeakingPlayback();
+        return true;
+    }
+
+    public synchronized long tryBeginNotificationPlayback() {
+        if (state != State.IDLE) {
+            return NO_PLAYBACK_GENERATION;
+        }
+        return beginSpeakingPlayback();
+    }
+
+    public synchronized long beginRuntimePlayback() {
+        return beginRuntimePlayback(null);
+    }
+
+    public synchronized long beginRuntimePlayback(Long expectedPlaybackGeneration) {
+        if (expectedPlaybackGeneration != null) {
+            return playbackActive(expectedPlaybackGeneration) ? expectedPlaybackGeneration : NO_PLAYBACK_GENERATION;
+        }
+        if (state == State.LISTENING) {
+            return NO_PLAYBACK_GENERATION;
+        }
+        if (state == State.SPEAKING && activePlaybackGeneration != NO_PLAYBACK_GENERATION) {
+            return NO_PLAYBACK_GENERATION;
+        }
+        return beginSpeakingPlayback();
+    }
+
+    public synchronized boolean playbackActive(long generation) {
+        return state == State.SPEAKING && activePlaybackGeneration == generation;
+    }
+
+    public synchronized boolean turnActive(long generation) {
+        return turnGeneration == generation && abortedTurnGeneration != generation && state == State.PROCESSING;
+    }
+
+    /**
+     * 判断普通语音回合是否已经被新的状态或会话切换取消。
+     *
+     * @param generation 回合代际
+     * @return true 表示该普通回合已失效
+     */
+    public synchronized boolean regularTurnCancelled(long generation) {
+        return abortedTurnGeneration == generation || turnGeneration != generation || state == State.LISTENING;
+    }
+
+    /**
+     * 仅当普通语音回合仍未被取消时，在会话锁内执行动作。
+     *
+     * @param generation 回合代际
+     * @param action 待执行动作
+     * @return true 表示动作已执行
+     */
+    public synchronized boolean runIfRegularTurnNotCancelled(long generation, Runnable action) {
+        if (regularTurnCancelled(generation)) {
+            return false;
+        }
+        action.run();
+        return true;
+    }
+
+    public synchronized boolean completePlayback(long generation) {
+        if (!playbackActive(generation)) {
+            return false;
+        }
+        markIdleInternal();
+        return true;
+    }
+
+    public synchronized boolean markIdleIfTurnActive(long generation) {
+        if (!turnActive(generation)) {
+            return false;
+        }
+        markIdleInternal();
         return true;
     }
 
     public synchronized void markIdle() {
-        cancelPlaybackLocked();
+        markIdleInternal();
+    }
+
+    private void markIdleInternal() {
         state = State.IDLE;
+        activePlaybackGeneration = NO_PLAYBACK_GENERATION;
         audioFrames.clear();
+    }
+
+    private long beginSpeakingPlayback() {
+        state = State.SPEAKING;
+        activePlaybackGeneration = ++playbackGeneration;
+        return activePlaybackGeneration;
+    }
+
+    public synchronized void requestAbort() {
+        requestAbortLocked();
+    }
+
+    private void requestAbortLocked() {
+        abortedTurnGeneration = turnGeneration;
+    }
+
+    public boolean abortRequested(long turnGeneration) {
+        return abortedTurnGeneration == turnGeneration;
     }
 
     public void updatePlayback(XiaozhiTtsPlayback playback) {
@@ -163,7 +289,7 @@ public class XiaozhiVoiceSession {
     }
 
     /**
-     * 在守卫仍有效时注册播放控制器并进入播报状态。
+     * 在守卫仍有效时注册旧式播放控制器并进入播报状态。
      *
      * @param playback 播放控制器
      * @param activeSupplier 当前回合有效性判断
@@ -179,7 +305,7 @@ public class XiaozhiVoiceSession {
                 return false;
             }
             this.playback = playback;
-            state = State.SPEAKING;
+            beginSpeakingPlayback();
             return true;
         }
     }
@@ -203,6 +329,7 @@ public class XiaozhiVoiceSession {
             playback.cancel();
             playback = null;
         }
+        activePlaybackGeneration = NO_PLAYBACK_GENERATION;
     }
 
     public synchronized boolean hasPlayback(XiaozhiTtsPlayback expectedPlayback) {
@@ -214,12 +341,25 @@ public class XiaozhiVoiceSession {
             return;
         }
         playback = null;
-        state = State.IDLE;
-        audioFrames.clear();
+        markIdleInternal();
     }
 
     public synchronized void addAudioFrame(XiaozhiAudioFrame frame) {
         audioFrames.add(frame);
+    }
+
+    /**
+     * 仅当当前仍处于监听态时写入音频帧。
+     *
+     * @param frame 音频帧
+     * @return true 表示已写入
+     */
+    public synchronized boolean addAudioFrameIfListening(XiaozhiAudioFrame frame) {
+        if (state != State.LISTENING) {
+            return false;
+        }
+        audioFrames.add(frame);
+        return true;
     }
 
     public void writeAudioFrameToAsr(XiaozhiAudioFrame frame) {
@@ -284,6 +424,7 @@ public class XiaozhiVoiceSession {
         asrTurn.audioStream().close();
         asrTurn = null;
         state = State.IDLE;
+        activePlaybackGeneration = NO_PLAYBACK_GENERATION;
         audioFrames.clear();
     }
 
@@ -301,6 +442,16 @@ public class XiaozhiVoiceSession {
         return asrTurn;
     }
 
+    /**
+     * 待处理音频帧快照。
+     *
+     * @param turnGeneration 回合代际
+     * @param frames 音频帧列表
+     * @param accepted 是否接受本次处理
+     */
+    public record ProcessingAudio(long turnGeneration, List<XiaozhiAudioFrame> frames, boolean accepted) {
+    }
+
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
     }
@@ -311,6 +462,7 @@ public class XiaozhiVoiceSession {
 
     public record AsrTurn(
             long turnId,
+            long turnGeneration,
             String deviceId,
             String conversationId,
             SpeechToTextAudioStream audioStream,
@@ -325,5 +477,4 @@ public class XiaozhiVoiceSession {
             return deviceId.equals(currentDeviceId) && conversationId.equals(currentConversationId);
         }
     }
-
 }

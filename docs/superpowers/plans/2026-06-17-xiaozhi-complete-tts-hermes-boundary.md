@@ -1152,7 +1152,7 @@ Redis 配置订阅
 **文件：**
 - 修改：`docs/superpowers/plans/2026-06-17-xiaozhi-complete-tts-hermes-boundary.md`
 
-- [ ] **步骤 1：运行 Java 审查**
+- [x] **步骤 1：运行 Java 审查**
 
 适用 `java-reviewer`。重点检查：
 
@@ -1166,7 +1166,7 @@ ByteBuffer 复用安全
 异常路径是否恢复 session 状态
 ```
 
-- [ ] **步骤 2：生成影响范围**
+- [x] **步骤 2：生成影响范围**
 
 适用 `/impact-scope` 时，影响范围至少包含：
 
@@ -1178,7 +1178,7 @@ Hermes 响应解析边界
 部署环境变量
 ```
 
-- [ ] **步骤 3：更新完成记录**
+- [x] **步骤 3：更新完成记录**
 
 在本文末尾追加：
 
@@ -1191,6 +1191,73 @@ Hermes 响应解析边界
 - 远程环境：
 - 已知风险：
 ```
+
+## 完成记录
+
+- 实施日期：2026-06-18 08:25:13 CST
+- 验证命令：
+  - `/Users/jiangzhibin/.local/opt/mvnd/mvn/bin/mvn -pl "chatbot-voice-gateway" -am -Dtest=XiaozhiVoiceSessionServiceTest#shouldSuppressOldTurnTtsFailureAfterNewListenStarts -Dsurefire.failIfNoSpecifiedTests=false test`：1 个测试通过，验证旧 turn TTS 失败不会向新 `LISTENING` 回合发送旧 `tts_failed`。
+  - `/Users/jiangzhibin/.local/opt/mvnd/mvn/bin/mvn -pl "chatbot-voice-gateway" -am -Dtest=XiaozhiVoiceSessionServiceTest,XiaozhiTtsRuntimeTest -Dsurefire.failIfNoSpecifiedTests=false test`：72 个测试通过。
+  - `/Users/jiangzhibin/.local/opt/mvnd/mvn/bin/mvn -pl "chatbot-voice-gateway" -am test`：143 个测试通过。
+  - `git diff --check`：无 whitespace 错误。
+- 真机设备：未执行真机首轮对话、打断、通知播放验收；仍需现场用小智设备验证 `tts start`、`sentence_start`、Opus 二进制帧、`tts stop`、打断和提醒通知。
+- 远程环境：
+  - 本轮健康检查：`http://203.195.202.54:8766/actuator/health` 返回 `{"status":"UP"}`。
+  - 本轮只读 GET `http://203.195.202.54:8766/api/ota/check` 返回 405，说明该 OTA 检查入口不接受 GET；任务 13 已记录 OTA WebSocket 为 `ws://203.195.202.54:8766/xiaozhi/v1`。
+  - 任务 13 远程检查记录：`device_gateway`、`hermes` 容器运行中；`TENCENT_CLOUD_SECRET_ID=SET`、`TENCENT_CLOUD_SECRET_KEY=SET`、`CHATBOT_VOICE_DEFAULT_VOICE_ID=MISSING`（应用使用 `default` 默认值）、`TENCENT_CLOUD_TTS_VOICE_TYPE=SET`。
+- 已知风险：
+  - Hermes SSE stream 当前使用阻塞读取；`abort`、`close`、`listen.start`、`session.new`、`session.clear` 只能设置取消状态和停止 TTS，不能主动关闭正在阻塞的 Hermes SSE iterator。当前有 request timeout 兜底，chunk 返回后不会继续 TTS，但释放不够及时。
+  - `speed`、`pitch` 当前已完成配置解析和 `TextToSpeechOptions` 边界传递，腾讯云 TTS Provider 第一阶段尚未映射为真实请求参数。
+  - 真机首轮对话、打断和通知播放未在本轮完成，需要现场继续验收。
+  - 为关闭旧 turn `tts_failed` 与新 `listen.start` 之间的竞态，普通 turn 的 TTS 失败事件发送被放入 `XiaozhiVoiceSession` 会话锁内；当前范围仅覆盖失败事件发送，后续不要扩大该锁内 I/O 范围。
+
+`<!-- IMPACT-SCOPE:START -->`
+## 影响范围
+
+**改动性质**：新功能开发-混合（扩展现有方法 / 共享组件变更 / 接口契约变更）
+
+**新增功能验收点**（本次新增功能要测什么）
+- 小智 WebSocket 对话播放链路：`listen.start` + 二进制音频 + `listen.stop` 后，应完成 ASR -> Hermes streaming -> TTS runtime 播放，设备侧能收到 `tts start`、逐句 `sentence_start`、连续 Opus 二进制帧、`tts stop`。入口：`/xiaozhi/v1`、`/ws/xiaozhi/v1`。
+- 对话打断链路：播放中收到 `abort`、新 `listen.start`、`session.new` 或 `session.clear` 时，旧播放应取消，`tts stop` 幂等发送，旧 turn 的 TTS 失败不得向新 `LISTENING` 回合发送旧 `tts_failed`。入口：小智 WebSocket 控制帧。
+- 设备通知播放链路：空闲会话收到提醒通知时应通过同一 TTS runtime 播放；会话忙碌或播放失败时应返回失败且恢复 session 状态。入口：`XiaozhiVoiceSessionService.notifyDevice(...)`。
+- Hermes 响应解析边界：Java 侧只解析 Hermes Responses API 输出文本与结构化事件边界，不新增本地 AI 决策；本地提醒解析仅作为兼容层。入口：`HttpHermesClient` / `XiaozhiVoiceSessionService`。
+- 腾讯云 TTS 调用参数：默认音色继续由 `chatbot.voice.default-voice-id` 统一解析，新增 `speed`、`pitch` 配置边界和 `TextToSpeechOptions` 兼容入口。入口：`TextToSpeechClient` / `TencentCloudTextToSpeechClient`。
+- 部署环境变量：部署示例新增 TTS 默认 speed/pitch 与腾讯云 TTS voice type 配置项，需在测试环境确认真实 env 与应用默认值一致。入口：`deploy/chatbot-service.env.example`、`application.yml`。
+
+**直接影响场景**（老功能回归）
+- 小智 WebSocket 首轮对话、连续多轮对话、会话新建/清空、wake word abort。入口：`/xiaozhi/v1`、`/ws/xiaozhi/v1`。
+- 小智设备提醒通知播放与忙碌跳过策略。入口：`notifyDevice(...)`。
+- Hermes SSE 文本分句播放、Hermes 异常、Hermes 取消后的状态恢复。入口：`HermesClient.streamChat(...)`。
+- 腾讯云 TTS 与 fake TTS Provider 的兼容调用。入口：`TextToSpeechClient.synthesize(...)`。
+- 远程部署配置加载：ASR/TTS provider、腾讯云密钥、默认音色、speed/pitch、音频格式。入口：Spring Boot 配置。
+
+**关联影响场景**（建议回归）
+- WebSocket 二进制音频帧处理：只在 `LISTENING` 态收音，非监听态帧应被忽略。原因：会话状态切换与音频缓存 drain 改为原子操作。
+- TTS stop 幂等和发送异常日志。原因：stop 发送集中到 TTS runtime，异常路径需要保留 Throwable。
+- MCP/提醒兼容层。原因：提醒事件仍由 Java 兼容解析触发，但播报改走 TTS runtime。
+- smoke 脚本。原因：WebSocket smoke 增加 TTS/协议观测点，需与新播放链路保持一致。
+
+**接口字段变更**（调用方需同步；无变更写"无"）
+- WebSocket `/xiaozhi/v1`、`/ws/xiaozhi/v1`
+  - 改语义 `error.code=tts_failed`：旧 turn 已被新 `listen.start` 取消后不再发送给新回合；当前 turn TTS 失败和通知 TTS 失败仍会发送。
+  - 改语义 `tts start` / `sentence_start` / `stop`：对话播放和通知播放统一由 TTS runtime 管理，stop 保持幂等。
+- Java TTS Provider 边界
+  - 新增 `TextToSpeechOptions.voiceId/speed/pitch`：旧调用方仍可实现 `synthesize(String, VoiceId)`；新调用方可传 options。
+  - 改语义 `VoiceId("default")`：设备默认音色来源统一为 `chatbot.voice.default-voice-id`，腾讯云 `voice-type` 仅作为 Provider fallback。
+- 部署配置
+  - 新增 `CHATBOT_VOICE_TTS_DEFAULT_SPEED`、`CHATBOT_VOICE_TTS_DEFAULT_PITCH`。
+  - 新增/明确 `TENCENT_CLOUD_TTS_VOICE_TYPE`、`CHATBOT_VOICE_DEFAULT_VOICE_ID` 示例配置。
+
+**数据与兼容性**
+- 历史数据：无数据库、缓存、MQ、迁移脚本变更。
+- 配置开关：无新增功能开关；保留 `fake` Provider 默认能力，腾讯云真实 Provider 依赖现有密钥配置。
+- 兼容性：`TextToSpeechClient.synthesize(String, VoiceId)` 保留默认兼容路径；WebSocket URL 保持不变。
+
+**明确不影响**
+- 管理后台、角色 CRUD、MySQL 角色表、Redis 配置订阅：未引入相关实现。
+- Hermes Agent 内部推理、工具编排、意图理解、记忆：Java 侧不实现 AI 决策，只保留协议适配边界。
+- ESP32 固件仓库：本计划未修改固件代码；真机验收需另行执行。
+`<!-- IMPACT-SCOPE:END -->`
 
 ## 需要进一步明确的问题
 

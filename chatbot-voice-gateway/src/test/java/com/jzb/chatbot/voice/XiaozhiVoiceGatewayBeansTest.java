@@ -3,6 +3,7 @@ package com.jzb.chatbot.voice;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jzb.chatbot.common.id.VoiceId;
 import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeStreamingSpeechToTextClient;
@@ -15,6 +16,10 @@ import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextClient;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpAdminAuth;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
+import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
+import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
+import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime;
+import com.jzb.chatbot.voice.tts.XiaozhiVoiceProfileResolver;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
@@ -28,6 +33,8 @@ class XiaozhiVoiceGatewayBeansTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
             .withBean(ObjectMapper.class)
+            .withBean(XiaozhiMessageCodec.class)
+            .withBean(XiaozhiServerEventFactory.class)
             .withUserConfiguration(XiaozhiVoiceGatewayBeans.class);
 
     @Test
@@ -67,6 +74,11 @@ class XiaozhiVoiceGatewayBeansTest {
 
             assertThat(client).isInstanceOf(FakeTextToSpeechClient.class);
         });
+    }
+
+    @Test
+    void shouldCreateXiaozhiTtsRuntimeWithLightweightContext() {
+        contextRunner.run(context -> assertThat(context.getBean(XiaozhiTtsRuntime.class)).isNotNull());
     }
 
     @Test
@@ -116,6 +128,33 @@ class XiaozhiVoiceGatewayBeansTest {
                     assertThat(params.channels()).isEqualTo(1);
                     assertThat(params.frameDuration()).isEqualTo(60);
                 });
+    }
+
+    @Test
+    void shouldCreateConfiguredXiaozhiVoiceProfileResolver() {
+        contextRunner
+                .withPropertyValues(
+                        "chatbot.voice.default-voice-id=xiaozhi",
+                        "chatbot.voice.tts.default-speed=1.2",
+                        "chatbot.voice.tts.default-pitch=0.8"
+                )
+                .run(context -> {
+                    var resolver = context.getBean(XiaozhiVoiceProfileResolver.class);
+
+                    var profile = resolver.resolve("device-1");
+
+                    assertThat(profile.voiceId()).isEqualTo(new VoiceId("xiaozhi"));
+                    assertThat(profile.speed()).isEqualTo(1.2);
+                    assertThat(profile.pitch()).isEqualTo(0.8);
+                });
+    }
+
+    @Test
+    void shouldFailFastWhenDefaultVoiceSpeedIsInvalid() {
+        contextRunner
+                .withPropertyValues("chatbot.voice.tts.default-speed=0")
+                .run(context -> assertThat(context.getStartupFailure())
+                        .hasRootCauseMessage("speed must be positive"));
     }
 
     @Test

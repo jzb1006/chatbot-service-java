@@ -2,6 +2,7 @@ package com.jzb.chatbot.voice;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jzb.chatbot.common.id.VoiceId;
 import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeStreamingSpeechToTextClient;
@@ -10,13 +11,17 @@ import com.jzb.chatbot.speech.SpeechToTextClient;
 import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextConfig;
-import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextClient;
-import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextConfig;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechConfig;
+import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextClient;
+import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextConfig;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpAdminAuth;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
+import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
+import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
+import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime;
+import com.jzb.chatbot.voice.tts.XiaozhiVoiceProfileResolver;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -65,6 +70,15 @@ public class XiaozhiVoiceGatewayBeans {
     @Bean
     XiaozhiAsrMode xiaozhiAsrMode(@Value("${chatbot.voice.asr.mode:sentence}") String mode) {
         return new XiaozhiAsrMode(mode);
+    }
+
+    @Bean
+    XiaozhiVoiceProfileResolver xiaozhiVoiceProfileResolver(
+            @Value("${chatbot.voice.default-voice-id:default}") String defaultVoiceId,
+            @Value("${chatbot.voice.tts.default-speed:1.0}") double defaultSpeed,
+            @Value("${chatbot.voice.tts.default-pitch:1.0}") double defaultPitch
+    ) {
+        return new XiaozhiVoiceProfileResolver(new VoiceId(defaultVoiceId), defaultSpeed, defaultPitch);
     }
 
     @Bean
@@ -155,6 +169,15 @@ public class XiaozhiVoiceGatewayBeans {
                 sampleRate,
                 Duration.ofSeconds(timeoutSeconds)
         ));
+    }
+
+    @Bean
+    XiaozhiTtsRuntime xiaozhiTtsRuntime(
+            TextToSpeechClient textToSpeechClient,
+            XiaozhiMessageCodec codec,
+            XiaozhiServerEventFactory eventFactory
+    ) {
+        return new XiaozhiTtsRuntime(textToSpeechClient, codec, eventFactory);
     }
 
     @Bean

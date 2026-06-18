@@ -28,7 +28,7 @@ chatbot:
       allowed-device-ids: ${XIAOZHI_OTA_ALLOWED_DEVICE_IDS:}
       allowed-serial-numbers: ${XIAOZHI_OTA_ALLOWED_SERIAL_NUMBERS:}
   voice:
-    default-voice-id: default
+    default-voice-id: ${CHATBOT_VOICE_DEFAULT_VOICE_ID:default}
     websocket:
       token: ${XIAOZHI_WEBSOCKET_TOKEN:}
     mcp:
@@ -56,6 +56,8 @@ chatbot:
         chunk-timeout-millis: ${TENCENT_CLOUD_ASR_CHUNK_TIMEOUT_MILLIS:100}
         recognition-timeout-seconds: ${TENCENT_CLOUD_ASR_RECOGNITION_TIMEOUT_SECONDS:90}
     tts:
+      default-speed: ${CHATBOT_VOICE_TTS_DEFAULT_SPEED:1.0}
+      default-pitch: ${CHATBOT_VOICE_TTS_DEFAULT_PITCH:1.0}
       provider: tencent
       tencent:
         secret-id: ${TENCENT_CLOUD_SECRET_ID:}

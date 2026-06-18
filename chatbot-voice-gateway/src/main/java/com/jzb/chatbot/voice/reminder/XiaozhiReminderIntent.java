@@ -6,6 +6,8 @@ import java.util.regex.Pattern;
  * 小智提醒意图。
  * <p>
  * 解析常见口语相对时间提醒，作为 Hermes 工具调用未触发时的服务端兜底。
+ * 临时兼容：提醒意图最终应由 Hermes Agent 通过结构化事件返回。
+ * Java 不继续扩展自然语言规则。
  *
  * @author jiangzhibin
  * @since 2026-06-17 18:34:00
