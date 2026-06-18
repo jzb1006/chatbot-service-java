@@ -42,4 +42,24 @@ class XiaozhiReminderServiceTest {
         assertThat(intent.delaySeconds()).isEqualTo(60L);
         assertThat(intent.confirmationText()).isEqualTo("一分钟后提醒你喝水");
     }
+
+    @Test
+    void shouldParseAsrTextWithoutAfter() {
+        var intent = XiaozhiReminderIntent.parse("您一分钟提醒我喝水。");
+
+        assertThat(intent).isNotNull();
+        assertThat(intent.message()).isEqualTo("喝水");
+        assertThat(intent.delaySeconds()).isEqualTo(60L);
+        assertThat(intent.confirmationText()).isEqualTo("一分钟后提醒你喝水");
+    }
+
+    @Test
+    void shouldParseReminderTaskWithCallMeText() {
+        var intent = XiaozhiReminderIntent.parse("我现在是想测试，你能不能推送定时任务给我。你现在升一个一分钟后的定时任务，叫我喝水。");
+
+        assertThat(intent).isNotNull();
+        assertThat(intent.message()).isEqualTo("喝水");
+        assertThat(intent.delaySeconds()).isEqualTo(60L);
+        assertThat(intent.confirmationText()).isEqualTo("一分钟后提醒你喝水");
+    }
 }

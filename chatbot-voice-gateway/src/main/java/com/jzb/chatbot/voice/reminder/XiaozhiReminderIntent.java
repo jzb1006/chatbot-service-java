@@ -6,8 +6,7 @@ import java.util.regex.Pattern;
  * 小智提醒意图。
  * <p>
  * 解析常见口语相对时间提醒，作为 Hermes 工具调用未触发时的服务端兜底。
- * 临时兼容：提醒意图最终应由 Hermes Agent 通过结构化事件返回。
- * Java 不继续扩展自然语言规则。
+ * 仅覆盖生产日志中出现的相对时间提醒句式，复杂自然语言仍交给 Hermes Agent。
  *
  * @author jiangzhibin
  * @since 2026-06-17 18:34:00
@@ -15,7 +14,9 @@ import java.util.regex.Pattern;
 public record XiaozhiReminderIntent(String message, long delaySeconds, String confirmationText) {
 
     private static final Pattern RELATIVE_REMINDER = Pattern.compile(
-            "(?:(\\d+|一|两|二|三|四|五|六|七|八|九|十)\\s*(秒|分钟钟|分钟|分|小时|钟头)后)\\s*提醒我(.+)"
+            "(?:一个|1个)?\\s*(\\d+|一|两|二|三|四|五|六|七|八|九|十)\\s*"
+                    + "(秒|分钟钟|分钟|分|小时|钟头)\\s*(?:后|后的)?\\s*"
+                    + "(?:定时任务|提醒|闹钟|任务)?\\s*(?:提醒我|叫我)(.+)"
     );
 
     /**
