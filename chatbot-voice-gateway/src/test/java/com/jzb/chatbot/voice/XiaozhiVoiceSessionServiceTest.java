@@ -186,6 +186,35 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldContinueStreamingTurnWhenAsrCompletesBeforeListenStop() {
+        var sentenceSpeech = new RecordingSpeechToTextClient();
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("ping", "streaming-provider");
+        var serviceWithStreamingAsr = newService(
+                sentenceSpeech,
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(sentenceSpeech.audioFramePayloads()).isEmpty();
+        assertThat(streamingSpeech.callCount()).isEqualTo(1);
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"stt\"", "\"text\":\"ping\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "\"text\":\"pong\""));
+        assertThat(session.getSentMessages())
+                .anySatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
+    }
+
+    @Test
     void shouldCompleteStreamingAsrWhenSessionCloses() {
         var streamingSpeech = new EndAwareStreamingSpeechToTextClient();
         var serviceWithStreamingAsr = newService(
@@ -2979,6 +3008,28 @@ class XiaozhiVoiceSessionServiceTest {
             while (!audioStream.isEnd(chunk)) {
                 chunk = audioStream.take(Duration.ofMillis(100));
             }
+            return new SpeechToTextResult(text, provider, 0);
+        }
+
+        private int callCount() {
+            return callCount.get();
+        }
+    }
+
+    private static class ImmediateStreamingSpeechToTextClient implements StreamingSpeechToTextClient {
+
+        private final String text;
+        private final String provider;
+        private final java.util.concurrent.atomic.AtomicInteger callCount = new java.util.concurrent.atomic.AtomicInteger();
+
+        private ImmediateStreamingSpeechToTextClient(String text, String provider) {
+            this.text = text;
+            this.provider = provider;
+        }
+
+        @Override
+        public SpeechToTextResult transcribe(SpeechToTextAudioStream audioStream) {
+            callCount.incrementAndGet();
             return new SpeechToTextResult(text, provider, 0);
         }
 

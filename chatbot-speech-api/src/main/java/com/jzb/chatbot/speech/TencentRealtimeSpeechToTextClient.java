@@ -7,6 +7,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * 腾讯云实时 ASR 客户端。
@@ -14,6 +15,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * @author jiangzhibin
  * @since 2026-06-17 00:00:00
  */
+@Slf4j
 public class TencentRealtimeSpeechToTextClient implements StreamingSpeechToTextClient, AutoCloseable {
 
     private static final String PROVIDER = "tencent-realtime";
@@ -48,8 +50,13 @@ public class TencentRealtimeSpeechToTextClient implements StreamingSpeechToTextC
         Throwable primaryFailure = null;
         try {
             recognizer = new RecognizerOperationGuard(recognizerFactory.create(config, listener));
+            log.info("tencent realtime asr recognizer created, engineModelType={}, sampleRate={}, timeoutMillis={}",
+                    config.engineModelType(), config.sampleRate(), config.recognitionTimeout().toMillis());
             recognizer.start();
+            log.info("tencent realtime asr recognizer started, engineModelType={}, sampleRate={}",
+                    config.engineModelType(), config.sampleRate());
             writer = writeAudioAsync(audioStream, recognizer);
+            log.info("tencent realtime asr writer started");
             awaitRecognition(recognitionFinished, writer, failure);
             if (failure.get() != null) {
                 var failureException = new IllegalStateException("Tencent realtime ASR failed: " + failure.get());
@@ -57,6 +64,8 @@ public class TencentRealtimeSpeechToTextClient implements StreamingSpeechToTextC
             }
             audioStream.close();
             awaitWriter(writer);
+            log.info("tencent realtime asr completed, textBlank={}, audioMillis={}",
+                    finalResult.get().isBlank(), elapsedMillis(startedAt));
             return new SpeechToTextResult(finalResult.get(), PROVIDER, elapsedMillis(startedAt));
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
@@ -130,17 +139,21 @@ public class TencentRealtimeSpeechToTextClient implements StreamingSpeechToTextC
             @Override
             public void onSentenceEnd(String text) {
                 updateResult(finalResult, text);
+                log.info("tencent realtime asr sentence ended, textBlank={}", text == null || text.isBlank());
+                recognitionFinished.complete(null);
             }
 
             @Override
             public void onComplete(String text) {
                 updateResult(finalResult, text);
+                log.info("tencent realtime asr recognition completed, textBlank={}", text == null || text.isBlank());
                 recognitionFinished.complete(null);
             }
 
             @Override
             public void onFail(String message) {
                 failure.set(message == null || message.isBlank() ? "unknown" : message);
+                log.warn("tencent realtime asr failed callback, message={}", failure.get());
                 recognitionFinished.complete(null);
             }
         };
@@ -183,7 +196,9 @@ public class TencentRealtimeSpeechToTextClient implements StreamingSpeechToTextC
                 return;
             }
             if (audioStream.isEnd(chunk)) {
+                log.info("tencent realtime asr audio stream ended, stopping recognizer");
                 recognizer.stop(cancelled);
+                log.info("tencent realtime asr recognizer stopped by audio stream end");
                 return;
             }
             if (chunk.length > 0) {

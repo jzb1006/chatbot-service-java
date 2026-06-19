@@ -122,6 +122,21 @@ class TencentRealtimeSpeechToTextClientTest {
     }
 
     @Test
+    void shouldCompleteWhenRealtimeVadEndsSentence() {
+        var factory = new CapturingRecognizerFactory("测试文本");
+        factory.recognizer.completeOnFirstWrite = true;
+        var client = new TencentRealtimeSpeechToTextClient(validConfig(), factory);
+        var audioStream = new SpeechToTextAudioStream();
+
+        audioStream.write(new byte[] {1, 2, 3});
+        var result = client.transcribe(audioStream);
+
+        assertThat(result.text()).isEqualTo("测试文本");
+        assertThat(factory.recognizer.started).isTrue();
+        assertThat(factory.recognizer.closed).isTrue();
+    }
+
+    @Test
     void shouldStopWriterWhenRecognitionTimesOut() {
         var factory = new CapturingRecognizerFactory("测试文本");
         factory.recognizer.suppressCompletion = true;
@@ -470,6 +485,7 @@ class TencentRealtimeSpeechToTextClientTest {
 
             assertThat(request.getEngineModelType()).isEqualTo("16k_zh");
             assertThat(request.getVoiceFormat()).isEqualTo(1);
+            assertThat(request.getNeedVad()).isEqualTo(1);
             assertThat(request.getInputSampleRate()).isNull();
         } finally {
             recognizer.close();
@@ -553,6 +569,7 @@ class TencentRealtimeSpeechToTextClientTest {
         private String writeFailureMessage;
         private String failureMessage;
         private Duration completionDelay = Duration.ZERO;
+        private boolean completeOnFirstWrite;
         private boolean blockFirstWrite;
         private boolean blockBeforeFirstWriteBody;
         private boolean blockAfterFailureCallback;
@@ -609,6 +626,9 @@ class TencentRealtimeSpeechToTextClientTest {
             }
             if (writeFailureAfterCallback != null) {
                 throw writeFailureAfterCallback;
+            }
+            if (completeOnFirstWrite) {
+                listener.onSentenceEnd(text);
             }
         }
 

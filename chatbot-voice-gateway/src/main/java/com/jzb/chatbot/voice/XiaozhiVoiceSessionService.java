@@ -548,7 +548,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             if (!voiceSession.isActiveAsrTurn(asrTurn)) {
                 return;
             }
-            if (voiceSession.clearAsrStreamIfListening(asrTurn)) {
+            if (!voiceSession.beginAsrTurnProcessing(asrTurn)) {
                 return;
             }
             var userText = result == null ? "" : result.text();

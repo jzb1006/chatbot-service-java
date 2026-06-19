@@ -406,13 +406,24 @@ public class XiaozhiVoiceSession {
         return isActiveAsrTurn(turn) && turn.matchesContext(deviceId(), conversationId());
     }
 
-    public synchronized boolean clearAsrStreamIfListening(AsrTurn turn) {
-        if (state != State.LISTENING || asrTurn == null || !asrTurn.matches(turn)) {
+    /**
+     * 仅当流式 ASR 回合仍处于监听态时切换到处理态。
+     *
+     * @param turn ASR 回合
+     * @return true 表示当前回合已进入处理态
+     */
+    public synchronized boolean beginAsrTurnProcessing(AsrTurn turn) {
+        if (asrTurn == null || !asrTurn.matches(turn)) {
             return false;
         }
-        asrTurn.audioStream().close();
-        asrTurn = null;
-        state = State.IDLE;
+        if (state == State.PROCESSING) {
+            return true;
+        }
+        if (state != State.LISTENING) {
+            return false;
+        }
+        activePlaybackGeneration = NO_PLAYBACK_GENERATION;
+        state = State.PROCESSING;
         audioFrames.clear();
         return true;
     }
