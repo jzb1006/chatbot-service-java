@@ -103,6 +103,7 @@ class XiaozhiVoiceSessionServiceTest {
         service.handleText(session, new XiaozhiClientMessage(
                 "listen", "start", "manual", null, null, "ws-session-1", null
         ));
+        service.handleBinary(session, ByteBuffer.wrap(new byte[] {1, 2, 3}));
 
         service.handleText(session, new XiaozhiClientMessage(
                 "listen", "stop", null, null, null, "ws-session-1", null
@@ -110,6 +111,28 @@ class XiaozhiVoiceSessionServiceTest {
 
         assertThat(service.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
         assertThat(session.getSentMessages()).isNotEmpty();
+    }
+
+    @Test
+    void shouldEndSilentlyWhenListenStopHasNoAudioFrames() {
+        var speechToTextClient = new CountingSpeechToTextClient("ping");
+        var serviceWithCountingAsr = newService(speechToTextClient, new FakeHermesClient(), new FakeTextToSpeechClient());
+        var session = openSession(serviceWithCountingAsr);
+        serviceWithCountingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        serviceWithCountingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", null, null, null, "ws-session-1", null
+        ));
+
+        assertThat(speechToTextClient.calls()).isZero();
+        assertThat(serviceWithCountingAsr.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .noneSatisfy(payload -> assertThat(payload)
+                        .contains("\"type\":\"tts\"", "\"state\":\"sentence_start\""));
     }
 
     @Test
@@ -315,6 +338,33 @@ class XiaozhiVoiceSessionServiceTest {
                 .filteredOn(TextMessage.class::isInstance)
                 .extracting(message -> message.getPayload().toString())
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"stt\"", "streaming ping"));
+    }
+
+    @Test
+    void shouldSkipTtsWhenStreamingAsrTextIsBlank() {
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient(" ", "streaming-provider");
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""))
+                .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
+                        "\"text\":\"我没听清，请再说一遍\""));
+        assertThat(session.getSentMessages())
+                .noneSatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
     }
 
     @Test
@@ -1313,10 +1363,10 @@ class XiaozhiVoiceSessionServiceTest {
                 .filteredOn(TextMessage.class::isInstance)
                 .extracting(message -> message.getPayload().toString())
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""))
-                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
+                .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
                         "\"text\":\"我没听清，请再说一遍\""));
         assertThat(session.getSentMessages())
-                .anySatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
+                .noneSatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
     }
 
     @Test
@@ -1919,6 +1969,7 @@ class XiaozhiVoiceSessionServiceTest {
         serviceWithBlockingTts.handleText(session, new XiaozhiClientMessage(
                 "listen", "start", "manual", null, null, "ws-session-1", null
         ));
+        serviceWithBlockingTts.handleBinary(session, ByteBuffer.wrap(new byte[] {1, 2, 3}));
         var turnThread = Thread.startVirtualThread(() ->
                 serviceWithBlockingTts.handleText(session, new XiaozhiClientMessage(
                         "listen", "stop", null, null, null, "ws-session-1", null
@@ -1953,6 +2004,7 @@ class XiaozhiVoiceSessionServiceTest {
         serviceWithBlockingTts.handleText(session, new XiaozhiClientMessage(
                 "listen", "start", "manual", null, null, "ws-session-1", null
         ));
+        serviceWithBlockingTts.handleBinary(session, ByteBuffer.wrap(new byte[] {1, 2, 3}));
         var turnThread = Thread.startVirtualThread(() ->
                 serviceWithBlockingTts.handleText(session, new XiaozhiClientMessage(
                         "listen", "stop", null, null, null, "ws-session-1", null
@@ -1998,6 +2050,7 @@ class XiaozhiVoiceSessionServiceTest {
         serviceWithInterleavingRuntime.handleText(session, new XiaozhiClientMessage(
                 "listen", "start", "manual", null, null, "ws-session-1", null
         ));
+        serviceWithInterleavingRuntime.handleBinary(session, ByteBuffer.wrap(new byte[] {1, 2, 3}));
         var turnThread = Thread.startVirtualThread(() ->
                 serviceWithInterleavingRuntime.handleText(session, new XiaozhiClientMessage(
                         "listen", "stop", null, null, null, "ws-session-1", null
@@ -3146,6 +3199,26 @@ class XiaozhiVoiceSessionServiceTest {
         @Override
         public String transcribe(List<ByteBuffer> audioFrames) {
             return text;
+        }
+    }
+
+    private static class CountingSpeechToTextClient implements SpeechToTextClient {
+
+        private final String text;
+        private int calls;
+
+        private CountingSpeechToTextClient(String text) {
+            this.text = text;
+        }
+
+        @Override
+        public String transcribe(List<ByteBuffer> audioFrames) {
+            calls++;
+            return text;
+        }
+
+        private int calls() {
+            return calls;
         }
     }
 

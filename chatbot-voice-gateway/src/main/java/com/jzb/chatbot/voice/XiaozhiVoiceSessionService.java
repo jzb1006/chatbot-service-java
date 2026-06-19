@@ -65,7 +65,6 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     private static final String DEVICE_ID_HEADER = "Device-Id";
     private static final String CLIENT_ID_HEADER = "Client-Id";
     private static final String SENTENCE_ASR_PROVIDER = "sentence";
-    private static final String ASR_EMPTY_PROMPT = "我没听清，请再说一遍";
     private static final String ASR_FAILED_PROMPT = "语音识别失败，请再试一次";
     private static final String HERMES_FAILED_PROMPT = "对话服务暂时不可用，请稍后再试";
     private static final String INTERNAL_ERROR_PROMPT = "服务暂时不可用，请稍后再试";
@@ -626,6 +625,12 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     ) {
         var turnGeneration = processingAudio.turnGeneration();
         try {
+            if (!XiaozhiVoiceInputGate.shouldTranscribe(processingAudio.frames())) {
+                log.info("xiaozhi no speech detected, sessionId={}, deviceId={}, audioFrames={}",
+                        webSocketSession.getId(), voiceSession.deviceId(), processingAudio.frames().size());
+                voiceSession.markIdleIfTurnActive(turnGeneration);
+                return;
+            }
             var audioFrames = processingAudio.frames().stream()
                     .map(frame -> ByteBuffer.wrap(frame.payload()))
                     .toList();
@@ -648,16 +653,12 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         transcription.provider(),
                         audioFrameCount,
                         asrMillis);
-                sendRecoverableTurnError(
+                trySendTurnErrorIfActive(
                         webSocketSession,
                         voiceSession,
                         turnGeneration,
                         "asr_empty",
-                        "未识别到语音",
-                        ASR_EMPTY_PROMPT,
-                        asrMillis,
-                        0,
-                        transcription.provider()
+                        "未识别到语音"
                 );
                 voiceSession.markIdleIfTurnActive(turnGeneration);
                 return;
@@ -740,15 +741,6 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         voiceSession,
                         asrTurn,
                         eventFactory.error(voiceSession.sessionId(), "asr_empty", "未识别到语音")
-                );
-                sendRecoverableTurnTts(
-                        webSocketSession,
-                        voiceSession,
-                        asrTurn.turnGeneration(),
-                        ASR_EMPTY_PROMPT,
-                        asrMillis,
-                        0,
-                        provider(result)
                 );
                 voiceSession.markIdleIfAsrTurn(asrTurn);
                 return;
