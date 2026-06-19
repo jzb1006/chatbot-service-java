@@ -17,6 +17,8 @@ import com.jzb.chatbot.speech.TencentCloudStreamingTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextClient;
 import com.jzb.chatbot.speech.TextToSpeechClient;
+import com.jzb.chatbot.voice.bargein.XiaozhiBargeInDetector;
+import com.jzb.chatbot.voice.bargein.XiaozhiBargeInProperties;
 import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackProperties;
 import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRuntime;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpAdminAuth;
@@ -101,6 +103,15 @@ class XiaozhiVoiceGatewayBeansTest {
     @Test
     void shouldDisableMusicPlaybackByDefault() {
         contextRunner.run(context -> assertThat(context).doesNotHaveBean(XiaozhiMusicPlaybackRuntime.class));
+    }
+
+    @Test
+    void shouldCreateBargeInDetectorWithDefaultProperties() {
+        contextRunner.run(context -> {
+            assertThat(context).hasSingleBean(XiaozhiBargeInDetector.class);
+            assertThat(context).hasSingleBean(XiaozhiBargeInProperties.class);
+            assertThat(context.getBean(XiaozhiBargeInProperties.class).enabled()).isFalse();
+        });
     }
 
     @Test

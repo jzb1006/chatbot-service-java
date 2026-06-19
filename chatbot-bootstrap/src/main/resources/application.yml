@@ -40,6 +40,12 @@ chatbot:
       sample-rate: ${CHATBOT_VOICE_AUDIO_SAMPLE_RATE:16000}
       channels: ${CHATBOT_VOICE_AUDIO_CHANNELS:1}
       frame-duration: ${CHATBOT_VOICE_AUDIO_FRAME_DURATION:60}
+    barge-in:
+      enabled: ${CHATBOT_VOICE_BARGE_IN_ENABLED:false}
+      min-text-length: ${CHATBOT_VOICE_BARGE_IN_MIN_TEXT_LENGTH:2}
+      cooldown-ms: ${CHATBOT_VOICE_BARGE_IN_COOLDOWN_MS:500}
+      similarity-threshold: ${CHATBOT_VOICE_BARGE_IN_SIMILARITY_THRESHOLD:0.82}
+      asr-timeout: ${CHATBOT_VOICE_BARGE_IN_ASR_TIMEOUT:2s}
     music:
       enabled: ${CHATBOT_VOICE_MUSIC_ENABLED:false}
       ffmpeg-path: ${CHATBOT_VOICE_MUSIC_FFMPEG_PATH:ffmpeg}

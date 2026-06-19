@@ -46,7 +46,9 @@ public class XiaozhiTtsRuntime {
     private final XiaozhiMessageCodec codec;
     private final XiaozhiServerEventFactory eventFactory;
     private final XiaozhiMusicPlaybackCoordinator musicPlaybackCoordinator;
+    private final Object activePlaybackLock = new Object();
     private final Map<String, XiaozhiTtsPlayback> activePlaybacks = new ConcurrentHashMap<>();
+    private final Map<String, Long> activePlaybackGenerations = new ConcurrentHashMap<>();
     private final Map<String, StreamingTextToSpeechSession> activeStreamingSessions = new ConcurrentHashMap<>();
 
     public XiaozhiTtsRuntime(
@@ -118,7 +120,7 @@ public class XiaozhiTtsRuntime {
         }
         var naturalPlaybackFinished = false;
         XiaozhiTtsResult result = null;
-        activePlaybacks.put(sessionId, playback);
+        registerActivePlayback(sessionId, playbackGeneration, playback, null);
         voiceSession.updatePlayback(playback);
         try {
             if (!cancelled(request, playback)) {
@@ -149,7 +151,7 @@ public class XiaozhiTtsRuntime {
                 resumeMusicAfterTts(voiceSession.deviceId());
                 result = result(playback);
             } finally {
-                activePlaybacks.remove(sessionId, playback);
+                unregisterActivePlayback(sessionId, playbackGeneration, playback, null);
                 voiceSession.clearPlayback(playback);
                 voiceSession.completePlayback(playbackGeneration);
             }
@@ -187,11 +189,11 @@ public class XiaozhiTtsRuntime {
         var completedByProducer = new AtomicBoolean();
         var listener = new RuntimeStreamingListener(request, playback);
         StreamingTextToSpeechSession streamingSession = null;
-        activePlaybacks.put(sessionId, playback);
+        registerActivePlayback(sessionId, playbackGeneration, playback, null);
         voiceSession.updatePlayback(playback);
         try {
             streamingSession = streamingTextToSpeechClient.open(request.options(), listener);
-            activeStreamingSessions.put(sessionId, streamingSession);
+            registerActivePlayback(sessionId, playbackGeneration, playback, streamingSession);
             if (!cancelled(request.cancellationRequested(), playback)) {
                 sendText(webSocketSession, eventFactory.llmEmotion(sessionId, DEFAULT_EMOTION));
             }
@@ -237,10 +239,7 @@ public class XiaozhiTtsRuntime {
                 resumeMusicAfterTts(voiceSession.deviceId());
                 result = result(playback);
             } finally {
-                if (streamingSession != null) {
-                    activeStreamingSessions.remove(sessionId, streamingSession);
-                }
-                activePlaybacks.remove(sessionId, playback);
+                unregisterActivePlayback(sessionId, playbackGeneration, playback, streamingSession);
                 voiceSession.clearPlayback(playback);
                 voiceSession.completePlayback(playbackGeneration);
             }
@@ -288,11 +287,76 @@ public class XiaozhiTtsRuntime {
      * @param sessionId 会话标识
      */
     public void cancel(String sessionId) {
-        var playback = activePlaybacks.get(sessionId);
+        cancel(activePlayback(sessionId));
+    }
+
+    /**
+     * 仅取消指定播放代际的活跃播放。
+     *
+     * @param sessionId 会话标识
+     * @param playbackGeneration 播放代际
+     * @return true 表示命中并发起取消
+     */
+    public boolean cancel(String sessionId, long playbackGeneration) {
+        var activePlayback = activePlayback(sessionId, playbackGeneration);
+        if (activePlayback == null) {
+            return false;
+        }
+        cancel(activePlayback);
+        return true;
+    }
+
+    private void registerActivePlayback(
+            String sessionId,
+            long playbackGeneration,
+            XiaozhiTtsPlayback playback,
+            StreamingTextToSpeechSession streamingSession
+    ) {
+        synchronized (activePlaybackLock) {
+            activePlaybacks.put(sessionId, playback);
+            activePlaybackGenerations.put(sessionId, playbackGeneration);
+            if (streamingSession != null) {
+                activeStreamingSessions.put(sessionId, streamingSession);
+            }
+        }
+    }
+
+    private void unregisterActivePlayback(
+            String sessionId,
+            long playbackGeneration,
+            XiaozhiTtsPlayback playback,
+            StreamingTextToSpeechSession streamingSession
+    ) {
+        synchronized (activePlaybackLock) {
+            activePlaybacks.remove(sessionId, playback);
+            activePlaybackGenerations.remove(sessionId, playbackGeneration);
+            if (streamingSession != null) {
+                activeStreamingSessions.remove(sessionId, streamingSession);
+            }
+        }
+    }
+
+    private ActivePlayback activePlayback(String sessionId) {
+        synchronized (activePlaybackLock) {
+            return new ActivePlayback(activePlaybacks.get(sessionId), activeStreamingSessions.get(sessionId));
+        }
+    }
+
+    private ActivePlayback activePlayback(String sessionId, long playbackGeneration) {
+        synchronized (activePlaybackLock) {
+            if (!Long.valueOf(playbackGeneration).equals(activePlaybackGenerations.get(sessionId))) {
+                return null;
+            }
+            return new ActivePlayback(activePlaybacks.get(sessionId), activeStreamingSessions.get(sessionId));
+        }
+    }
+
+    private void cancel(ActivePlayback activePlayback) {
+        var playback = activePlayback.playback();
         if (playback != null) {
             playback.cancel();
         }
-        var streamingSession = activeStreamingSessions.get(sessionId);
+        var streamingSession = activePlayback.streamingSession();
         if (streamingSession != null) {
             streamingSession.cancel();
         }
@@ -543,5 +607,11 @@ public class XiaozhiTtsRuntime {
         public StreamingTtsWriteException(String message, Throwable cause) {
             super(message, cause);
         }
+    }
+
+    private record ActivePlayback(
+            XiaozhiTtsPlayback playback,
+            StreamingTextToSpeechSession streamingSession
+    ) {
     }
 }

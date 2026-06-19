@@ -101,6 +101,31 @@ class XiaozhiTtsRuntimeTest {
     }
 
     @Test
+    void shouldIgnoreCancelWhenPlaybackGenerationDoesNotMatch() throws Exception {
+        var ttsClient = new BlockingTextToSpeechClient();
+        var runtime = newRuntime(ttsClient);
+        var session = new TimingWebSocketSession("ws-session-1");
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+        var played = new AtomicBoolean();
+
+        var thread = Thread.startVirtualThread(() -> played.set(runtime.speak(new XiaozhiTtsRequest(
+                session,
+                voiceSession,
+                List.of("第一句内容很完整。", "第二句内容也完整。"),
+                TextToSpeechOptions.defaults()
+        ))));
+
+        assertThat(ttsClient.awaitFirstCall()).isTrue();
+        assertThat(runtime.cancel(session.getId(), 2L)).isFalse();
+        ttsClient.releaseFirstCall();
+        thread.join(2_000L);
+
+        assertThat(thread.isAlive()).isFalse();
+        assertThat(played.get()).isTrue();
+        assertThat(ttsClient.texts()).containsExactly("第一句内容很完整。", "第二句内容也完整。");
+    }
+
+    @Test
     void shouldPlaySentencesInOrder() {
         var ttsClient = new RecordingTextToSpeechClient();
         var runtime = newRuntime(ttsClient);

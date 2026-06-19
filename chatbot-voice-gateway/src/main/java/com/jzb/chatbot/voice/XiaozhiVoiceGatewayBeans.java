@@ -21,6 +21,8 @@ import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextConfig;
 import com.jzb.chatbot.speech.TencentStreamingTextToSpeechConfig;
 import com.jzb.chatbot.speech.TencentStreamingTtsSigner;
 import com.jzb.chatbot.speech.TextToSpeechClient;
+import com.jzb.chatbot.voice.bargein.XiaozhiBargeInDetector;
+import com.jzb.chatbot.voice.bargein.XiaozhiBargeInProperties;
 import com.jzb.chatbot.voice.music.FfmpegMusicDecoder;
 import com.jzb.chatbot.voice.music.MusicAudioSource;
 import com.jzb.chatbot.voice.music.MusicFrameSender;
@@ -99,6 +101,23 @@ public class XiaozhiVoiceGatewayBeans {
             @Value("${chatbot.voice.tts.default-pitch:1.0}") double defaultPitch
     ) {
         return new XiaozhiVoiceProfileResolver(new VoiceId(defaultVoiceId), defaultSpeed, defaultPitch);
+    }
+
+    @Bean
+    XiaozhiBargeInProperties xiaozhiBargeInProperties(Environment environment) {
+        var binder = Binder.get(environment);
+        return new XiaozhiBargeInProperties(
+                binder.bind("chatbot.voice.barge-in.enabled", Boolean.class).orElse(false),
+                binder.bind("chatbot.voice.barge-in.min-text-length", Integer.class).orElse(2),
+                binder.bind("chatbot.voice.barge-in.cooldown-ms", Long.class).orElse(500L),
+                binder.bind("chatbot.voice.barge-in.similarity-threshold", Double.class).orElse(0.82),
+                binder.bind("chatbot.voice.barge-in.asr-timeout", Duration.class).orElse(Duration.ofSeconds(2))
+        );
+    }
+
+    @Bean
+    XiaozhiBargeInDetector xiaozhiBargeInDetector(XiaozhiBargeInProperties properties) {
+        return new XiaozhiBargeInDetector(properties);
     }
 
     @Bean

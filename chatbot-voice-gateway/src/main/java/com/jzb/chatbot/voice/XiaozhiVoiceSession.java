@@ -2,6 +2,7 @@ package com.jzb.chatbot.voice;
 
 import com.jzb.chatbot.speech.SpeechToTextAudioStream;
 import com.jzb.chatbot.speech.StreamingOpusToPcmDecoder;
+import com.jzb.chatbot.voice.bargein.XiaozhiBargeInTurn;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioFrame;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -41,6 +42,10 @@ public class XiaozhiVoiceSession {
     private long conversationSequence;
     private long asrTurnSequence;
     private AsrTurn asrTurn;
+    private long bargeInTurnSequence;
+    private XiaozhiBargeInTurn bargeInTurn;
+    private String currentSpeakingText = "";
+    private long currentSpeakingStartedAtEpochMillis;
     private volatile XiaozhiTtsPlayback playback;
     private volatile long turnGeneration;
     private volatile long abortedTurnGeneration = -1;
@@ -116,16 +121,19 @@ public class XiaozhiVoiceSession {
     public synchronized long markListening() {
         cancelPlaybackLocked();
         terminateAsrStreamLocked();
+        clearBargeInTurnLocked();
         turnGeneration++;
         activePlaybackGeneration = NO_PLAYBACK_GENERATION;
         state = State.LISTENING;
         audioFrames.clear();
+        clearCurrentSpeakingLocked();
         return turnGeneration;
     }
 
     public synchronized AsrTurn startAsrStream(int sampleRate) {
         cancelPlaybackLocked();
         terminateAsrStreamLocked();
+        clearBargeInTurnLocked();
         turnGeneration++;
         activePlaybackGeneration = NO_PLAYBACK_GENERATION;
         asrTurn = new AsrTurn(
@@ -138,11 +146,14 @@ public class XiaozhiVoiceSession {
         );
         state = State.LISTENING;
         audioFrames.clear();
+        clearCurrentSpeakingLocked();
         return asrTurn;
     }
 
     public synchronized long markProcessing() {
         activePlaybackGeneration = NO_PLAYBACK_GENERATION;
+        clearBargeInTurnLocked();
+        clearCurrentSpeakingLocked();
         state = State.PROCESSING;
         return turnGeneration;
     }
@@ -157,6 +168,8 @@ public class XiaozhiVoiceSession {
             return new ProcessingAudio(turnGeneration, List.of(), false);
         }
         activePlaybackGeneration = NO_PLAYBACK_GENERATION;
+        clearBargeInTurnLocked();
+        clearCurrentSpeakingLocked();
         state = State.PROCESSING;
         var frames = List.copyOf(audioFrames);
         audioFrames.clear();
@@ -263,12 +276,15 @@ public class XiaozhiVoiceSession {
     private void markIdleInternal() {
         state = State.IDLE;
         activePlaybackGeneration = NO_PLAYBACK_GENERATION;
+        clearBargeInTurnLocked();
+        clearCurrentSpeakingLocked();
         audioFrames.clear();
     }
 
     private long beginSpeakingPlayback() {
         state = State.SPEAKING;
         activePlaybackGeneration = ++playbackGeneration;
+        currentSpeakingStartedAtEpochMillis = System.currentTimeMillis();
         return activePlaybackGeneration;
     }
 
@@ -278,6 +294,8 @@ public class XiaozhiVoiceSession {
 
     private void requestAbortLocked() {
         abortedTurnGeneration = turnGeneration;
+        clearBargeInTurnLocked();
+        clearCurrentSpeakingLocked();
     }
 
     public boolean abortRequested(long turnGeneration) {
@@ -329,6 +347,8 @@ public class XiaozhiVoiceSession {
             playback.cancel();
             playback = null;
         }
+        clearBargeInTurnLocked();
+        clearCurrentSpeakingLocked();
         activePlaybackGeneration = NO_PLAYBACK_GENERATION;
     }
 
@@ -369,6 +389,109 @@ public class XiaozhiVoiceSession {
         }
         var pcm = currentTurn.opusDecoder().decode(ByteBuffer.wrap(frame.payload()));
         currentTurn.audioStream().write(pcm);
+    }
+
+    public synchronized XiaozhiBargeInTurn startBargeInTurn(int sampleRate) {
+        if (state != State.SPEAKING || activePlaybackGeneration == NO_PLAYBACK_GENERATION) {
+            return null;
+        }
+        clearBargeInTurnLocked();
+        bargeInTurn = new XiaozhiBargeInTurn(
+                ++bargeInTurnSequence,
+                activePlaybackGeneration,
+                deviceId(),
+                new SpeechToTextAudioStream(),
+                new StreamingOpusToPcmDecoder(sampleRate),
+                System.currentTimeMillis()
+        );
+        return bargeInTurn;
+    }
+
+    public synchronized XiaozhiBargeInTurn activeBargeInTurn() {
+        return bargeInTurn;
+    }
+
+    public synchronized boolean activeBargeInTurnMatches(XiaozhiBargeInTurn turn) {
+        return bargeInTurn != null
+                && bargeInTurn.matches(turn)
+                && state == State.SPEAKING
+                && activePlaybackGeneration == turn.playbackGeneration();
+    }
+
+    public synchronized boolean completeBargeInTurn(XiaozhiBargeInTurn turn) {
+        if (bargeInTurn == null || !bargeInTurn.matches(turn)) {
+            return false;
+        }
+        bargeInTurn.audioStream().complete();
+        return true;
+    }
+
+    public synchronized boolean cancelPlaybackAndListenIfBargeInTurnActive(XiaozhiBargeInTurn turn) {
+        if (!activeBargeInTurnMatches(turn)) {
+            return false;
+        }
+        abortedTurnGeneration = turnGeneration;
+        if (playback != null) {
+            playback.cancel();
+            playback = null;
+        }
+        clearBargeInTurnLocked();
+        turnGeneration++;
+        activePlaybackGeneration = NO_PLAYBACK_GENERATION;
+        state = State.LISTENING;
+        audioFrames.clear();
+        clearCurrentSpeakingLocked();
+        return true;
+    }
+
+    public void writeAudioFrameToBargeIn(XiaozhiAudioFrame frame) {
+        var currentTurn = activeBargeInTurn();
+        if (currentTurn == null || frame == null) {
+            return;
+        }
+        var pcm = currentTurn.opusDecoder().decode(ByteBuffer.wrap(frame.payload()));
+        currentTurn.audioStream().write(pcm);
+    }
+
+    public synchronized void clearBargeInTurn(XiaozhiBargeInTurn turn) {
+        if (bargeInTurn == null || !bargeInTurn.matches(turn)) {
+            return;
+        }
+        clearBargeInTurnLocked();
+    }
+
+    public synchronized void updateCurrentSpeakingText(String text) {
+        currentSpeakingText = text == null ? "" : text;
+    }
+
+    public synchronized void appendCurrentSpeakingText(String text) {
+        if (text != null && !text.isBlank()) {
+            currentSpeakingText = currentSpeakingText + text;
+        }
+    }
+
+    public synchronized String currentSpeakingText() {
+        return currentSpeakingText;
+    }
+
+    public synchronized long currentSpeakingElapsedMillis() {
+        if (currentSpeakingStartedAtEpochMillis <= 0) {
+            return 0;
+        }
+        return System.currentTimeMillis() - currentSpeakingStartedAtEpochMillis;
+    }
+
+    private void clearBargeInTurnLocked() {
+        if (bargeInTurn == null) {
+            return;
+        }
+        bargeInTurn.audioStream().complete();
+        bargeInTurn = null;
+    }
+
+    private void clearCurrentSpeakingLocked() {
+        currentSpeakingText = "";
+        currentSpeakingStartedAtEpochMillis = 0;
     }
 
     public synchronized AsrTurn completeAsrStream() {

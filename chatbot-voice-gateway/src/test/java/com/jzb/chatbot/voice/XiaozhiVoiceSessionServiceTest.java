@@ -25,6 +25,8 @@ import com.jzb.chatbot.speech.StreamingTextToSpeechListener;
 import com.jzb.chatbot.speech.StreamingTextToSpeechSession;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.speech.TextToSpeechOptions;
+import com.jzb.chatbot.voice.bargein.XiaozhiBargeInDetector;
+import com.jzb.chatbot.voice.bargein.XiaozhiBargeInProperties;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
 import com.jzb.chatbot.voice.music.XiaozhiMusicActionHandler;
 import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRequest;
@@ -123,6 +125,46 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldStartBargeInTurnWhenListenStartBargeInDuringSpeaking() {
+        var serviceWithBargeIn = newService(
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                new ImmediateStreamingSpeechToTextClient("", "streaming-provider"),
+                new XiaozhiBargeInDetector(new XiaozhiBargeInProperties(true, 2, 500, 0.82, Duration.ofMillis(200)))
+        );
+        var session = openSession(serviceWithBargeIn);
+        serviceWithBargeIn.getSession(session.getId()).markSpeaking();
+
+        serviceWithBargeIn.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "barge_in", null, null, "ws-session-1", null
+        ));
+
+        assertThat(serviceWithBargeIn.getSession(session.getId()).activeBargeInTurn()).isNotNull();
+    }
+
+    @Test
+    void shouldIgnoreBargeInStartWhenDisabled() {
+        var serviceWithDisabledBargeIn = newService(
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                new ImmediateStreamingSpeechToTextClient("", "streaming-provider"),
+                new XiaozhiBargeInDetector(new XiaozhiBargeInProperties(false, 2, 500, 0.82, Duration.ofMillis(200)))
+        );
+        var session = openSession(serviceWithDisabledBargeIn);
+        serviceWithDisabledBargeIn.getSession(session.getId()).markSpeaking();
+
+        serviceWithDisabledBargeIn.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "barge_in", null, null, "ws-session-1", null
+        ));
+
+        assertThat(serviceWithDisabledBargeIn.getSession(session.getId()).activeBargeInTurn()).isNull();
+    }
+
+    @Test
     void shouldStoreBinaryAudioFrameWhenListening() {
         var session = openSession();
         service.handleText(session, new XiaozhiClientMessage(
@@ -134,6 +176,96 @@ class XiaozhiVoiceSessionServiceTest {
         assertThat(service.getSession(session.getId()).drainAudioFrames())
                 .singleElement()
                 .satisfies(frame -> assertThat(frame.payload()).containsExactly(1, 2, 3));
+    }
+
+    @Test
+    void shouldAcceptBinaryForActiveBargeInTurnWhileSpeaking() {
+        var streamingSpeech = new RecordingBargeInStreamingSpeechToTextClient();
+        var serviceWithStreamingAsr = newService(
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech,
+                new XiaozhiBargeInDetector(new XiaozhiBargeInProperties(true, 2, 0, 0.82, Duration.ofMillis(200)))
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.getSession(session.getId()).markSpeaking();
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "barge_in", null, null, "ws-session-1", null
+        ));
+        serviceWithStreamingAsr.handleBinary(session, ByteBuffer.wrap(new byte[] {(byte) 0xf8, (byte) 0xff, (byte) 0xfe}));
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", "barge_in", null, null, "ws-session-1", null
+        ));
+
+        assertThat(streamingSpeech.callCount()).isEqualTo(1);
+        assertThat(streamingSpeech.awaitAudioChunk()).isTrue();
+        assertThat(streamingSpeech.pcmBytes()).isPositive();
+    }
+
+    @Test
+    void shouldCancelTtsAndEnterListeningWhenBargeInDetected() {
+        var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
+        var ttsRuntime = new RecordingCancelTtsRuntime(new FakeTextToSpeechClient(), codec, eventFactory);
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("等一下", "streaming-provider");
+        var serviceWithBargeIn = newService(
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                ttsRuntime,
+                eventFactory,
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech,
+                new XiaozhiBargeInDetector(new XiaozhiBargeInProperties(true, 2, 0, 0.82, Duration.ofMillis(200)))
+        );
+        var session = openSession(serviceWithBargeIn);
+        var voiceSession = serviceWithBargeIn.getSession(session.getId());
+        voiceSession.markSpeaking();
+        voiceSession.updateCurrentSpeakingText("这是一段很长的回答。");
+
+        serviceWithBargeIn.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "barge_in", null, null, "ws-session-1", null
+        ));
+        serviceWithBargeIn.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", "barge_in", null, null, "ws-session-1", null
+        ));
+
+        assertThat(ttsRuntime.awaitCancelled()).isTrue();
+        assertThat(serviceWithBargeIn.getSession(session.getId()).state())
+                .isEqualTo(XiaozhiVoiceSession.State.LISTENING);
+    }
+
+    @Test
+    void shouldKeepListeningWhenBargeInCancelRacesWithPlaybackCompletion() {
+        var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
+        var ttsRuntime = new InterleavingCancelTtsRuntime(new FakeTextToSpeechClient(), codec, eventFactory);
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("等一下", "streaming-provider");
+        var serviceWithBargeIn = newService(
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                ttsRuntime,
+                eventFactory,
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech,
+                new XiaozhiBargeInDetector(new XiaozhiBargeInProperties(true, 2, 0, 0.82, Duration.ofMillis(200)))
+        );
+        var session = openSession(serviceWithBargeIn);
+        var voiceSession = serviceWithBargeIn.getSession(session.getId());
+        var playbackGeneration = voiceSession.markSpeaking();
+        voiceSession.updateCurrentSpeakingText("这是一段很长的回答。");
+        ttsRuntime.completePlaybackOnCancel(voiceSession, playbackGeneration);
+
+        serviceWithBargeIn.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "barge_in", null, null, "ws-session-1", null
+        ));
+        serviceWithBargeIn.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", "barge_in", null, null, "ws-session-1", null
+        ));
+
+        assertThat(ttsRuntime.awaitCancelled()).isTrue();
+        assertThat(serviceWithBargeIn.getSession(session.getId()).state())
+                .isEqualTo(XiaozhiVoiceSession.State.LISTENING);
     }
 
     @Test
@@ -1990,6 +2122,34 @@ class XiaozhiVoiceSessionServiceTest {
         );
     }
 
+    private XiaozhiVoiceSessionService newService(
+            SpeechToTextClient speechToTextClient,
+            HermesClient hermesClient,
+            XiaozhiTtsRuntime ttsRuntime,
+            XiaozhiServerEventFactory eventFactory,
+            XiaozhiAsrMode asrMode,
+            StreamingSpeechToTextClient streamingSpeechToTextClient,
+            XiaozhiBargeInDetector bargeInDetector
+    ) {
+        return new XiaozhiVoiceSessionService(
+                codec,
+                speechToTextClient,
+                hermesClient,
+                ttsRuntime,
+                eventFactory,
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge(),
+                asrMode,
+                streamingSpeechToTextClient,
+                XiaozhiAudioParams.defaults(),
+                new XiaozhiVoiceProfileResolver(new VoiceId("default"), 1.0, 1.0),
+                bargeInDetector,
+                (XiaozhiMusicActionHandler) null,
+                (XiaozhiMusicPlaybackRuntime) null
+        );
+    }
+
     private XiaozhiVoiceSessionService newServiceWithMusic(
             HermesClient hermesClient,
             TextToSpeechClient textToSpeechClient,
@@ -2021,6 +2181,24 @@ class XiaozhiVoiceSessionServiceTest {
             XiaozhiAsrMode asrMode,
             StreamingSpeechToTextClient streamingSpeechToTextClient
     ) {
+        return newService(
+                speechToTextClient,
+                hermesClient,
+                textToSpeechClient,
+                asrMode,
+                streamingSpeechToTextClient,
+                new XiaozhiBargeInDetector(new XiaozhiBargeInProperties(false, 2, 500, 0.82, Duration.ofSeconds(2)))
+        );
+    }
+
+    private XiaozhiVoiceSessionService newService(
+            SpeechToTextClient speechToTextClient,
+            HermesClient hermesClient,
+            TextToSpeechClient textToSpeechClient,
+            XiaozhiAsrMode asrMode,
+            StreamingSpeechToTextClient streamingSpeechToTextClient,
+            XiaozhiBargeInDetector bargeInDetector
+    ) {
         var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
         return new XiaozhiVoiceSessionService(
                 codec,
@@ -2034,7 +2212,10 @@ class XiaozhiVoiceSessionServiceTest {
                 asrMode,
                 streamingSpeechToTextClient,
                 XiaozhiAudioParams.defaults(),
-                new XiaozhiVoiceProfileResolver(new VoiceId("default"), 1.0, 1.0)
+                new XiaozhiVoiceProfileResolver(new VoiceId("default"), 1.0, 1.0),
+                bargeInDetector,
+                (XiaozhiMusicActionHandler) null,
+                (XiaozhiMusicPlaybackRuntime) null
         );
     }
 
@@ -2505,6 +2686,79 @@ class XiaozhiVoiceSessionServiceTest {
             }
             request.voiceSession().completePlayback(playbackGeneration);
             return new XiaozhiTtsResult(true, 1, 1, false);
+        }
+    }
+
+    private static class RecordingCancelTtsRuntime extends XiaozhiTtsRuntime {
+
+        private final java.util.concurrent.CountDownLatch cancelled = new java.util.concurrent.CountDownLatch(1);
+
+        private RecordingCancelTtsRuntime(
+                TextToSpeechClient textToSpeechClient,
+                XiaozhiMessageCodec codec,
+                XiaozhiServerEventFactory eventFactory
+        ) {
+            super(textToSpeechClient, codec, eventFactory);
+        }
+
+        @Override
+        public void cancel(String sessionId) {
+            cancelled.countDown();
+            super.cancel(sessionId);
+        }
+
+        @Override
+        public boolean cancel(String sessionId, long playbackGeneration) {
+            cancelled.countDown();
+            super.cancel(sessionId);
+            return true;
+        }
+
+        private boolean awaitCancelled() {
+            return await(cancelled, Duration.ofSeconds(1));
+        }
+    }
+
+    private static class InterleavingCancelTtsRuntime extends XiaozhiTtsRuntime {
+
+        private final java.util.concurrent.CountDownLatch cancelled = new java.util.concurrent.CountDownLatch(1);
+        private XiaozhiVoiceSession voiceSession;
+        private long playbackGeneration;
+
+        private InterleavingCancelTtsRuntime(
+                TextToSpeechClient textToSpeechClient,
+                XiaozhiMessageCodec codec,
+                XiaozhiServerEventFactory eventFactory
+        ) {
+            super(textToSpeechClient, codec, eventFactory);
+        }
+
+        private void completePlaybackOnCancel(XiaozhiVoiceSession voiceSession, long playbackGeneration) {
+            this.voiceSession = voiceSession;
+            this.playbackGeneration = playbackGeneration;
+        }
+
+        @Override
+        public void cancel(String sessionId) {
+            if (voiceSession != null) {
+                voiceSession.completePlayback(playbackGeneration);
+            }
+            super.cancel(sessionId);
+            cancelled.countDown();
+        }
+
+        @Override
+        public boolean cancel(String sessionId, long playbackGeneration) {
+            if (voiceSession != null) {
+                voiceSession.completePlayback(this.playbackGeneration);
+            }
+            super.cancel(sessionId);
+            cancelled.countDown();
+            return true;
+        }
+
+        private boolean awaitCancelled() {
+            return await(cancelled, Duration.ofSeconds(1));
         }
     }
 
@@ -3035,6 +3289,39 @@ class XiaozhiVoiceSessionServiceTest {
 
         private int callCount() {
             return callCount.get();
+        }
+    }
+
+    private static class RecordingBargeInStreamingSpeechToTextClient implements StreamingSpeechToTextClient {
+
+        private final java.util.concurrent.CountDownLatch audioChunkReceived = new java.util.concurrent.CountDownLatch(1);
+        private final java.util.concurrent.atomic.AtomicInteger callCount = new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicInteger pcmBytes = new java.util.concurrent.atomic.AtomicInteger();
+
+        @Override
+        public SpeechToTextResult transcribe(SpeechToTextAudioStream audioStream) {
+            callCount.incrementAndGet();
+            var chunk = audioStream.take(Duration.ofSeconds(1));
+            if (!audioStream.isEnd(chunk) && chunk.length > 0) {
+                pcmBytes.addAndGet(chunk.length);
+                audioChunkReceived.countDown();
+            }
+            while (!audioStream.isEnd(chunk)) {
+                chunk = audioStream.take(Duration.ofMillis(100));
+            }
+            return new SpeechToTextResult("等一下", "streaming-provider", 0);
+        }
+
+        private int callCount() {
+            return callCount.get();
+        }
+
+        private boolean awaitAudioChunk() {
+            return await(audioChunkReceived, Duration.ofSeconds(1));
+        }
+
+        private int pcmBytes() {
+            return pcmBytes.get();
         }
     }
 
