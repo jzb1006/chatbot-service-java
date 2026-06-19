@@ -65,6 +65,10 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     private static final String DEVICE_ID_HEADER = "Device-Id";
     private static final String CLIENT_ID_HEADER = "Client-Id";
     private static final String SENTENCE_ASR_PROVIDER = "sentence";
+    private static final String ASR_EMPTY_PROMPT = "我没听清，请再说一遍";
+    private static final String ASR_FAILED_PROMPT = "语音识别失败，请再试一次";
+    private static final String HERMES_FAILED_PROMPT = "对话服务暂时不可用，请稍后再试";
+    private static final String INTERNAL_ERROR_PROMPT = "服务暂时不可用，请稍后再试";
 
     private final XiaozhiMessageCodec codec;
     private final SpeechToTextClient speechToTextClient;
@@ -644,7 +648,17 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         transcription.provider(),
                         audioFrameCount,
                         asrMillis);
-                trySendTurnErrorIfActive(webSocketSession, voiceSession, turnGeneration, "asr_empty", "未识别到语音");
+                sendRecoverableTurnError(
+                        webSocketSession,
+                        voiceSession,
+                        turnGeneration,
+                        "asr_empty",
+                        "未识别到语音",
+                        ASR_EMPTY_PROMPT,
+                        asrMillis,
+                        0,
+                        transcription.provider()
+                );
                 voiceSession.markIdleIfTurnActive(turnGeneration);
                 return;
             }
@@ -684,6 +698,17 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         } catch (RuntimeException exception) {
             log.warn("xiaozhi turn failed, sessionId={}, deviceId={}, message={}",
                     webSocketSession.getId(), voiceSession.deviceId(), exception.getMessage(), exception);
+            sendRecoverableTurnError(
+                    webSocketSession,
+                    voiceSession,
+                    turnGeneration,
+                    "internal_error",
+                    "服务暂时不可用",
+                    INTERNAL_ERROR_PROMPT,
+                    0,
+                    0,
+                    SENTENCE_ASR_PROVIDER
+            );
             voiceSession.markIdleIfTurnActive(turnGeneration);
         }
     }
@@ -715,6 +740,15 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         voiceSession,
                         asrTurn,
                         eventFactory.error(voiceSession.sessionId(), "asr_empty", "未识别到语音")
+                );
+                sendRecoverableTurnTts(
+                        webSocketSession,
+                        voiceSession,
+                        asrTurn.turnGeneration(),
+                        ASR_EMPTY_PROMPT,
+                        asrMillis,
+                        0,
+                        provider(result)
                 );
                 voiceSession.markIdleIfAsrTurn(asrTurn);
                 return;
@@ -766,6 +800,15 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                     voiceSession,
                     asrTurn,
                     eventFactory.error(voiceSession.sessionId(), "asr_failed", "语音识别失败")
+            );
+            sendRecoverableTurnTts(
+                    webSocketSession,
+                    voiceSession,
+                    asrTurn.turnGeneration(),
+                    ASR_FAILED_PROMPT,
+                    elapsedMillis(asrStartedAt),
+                    0,
+                    "unknown"
             );
             voiceSession.markIdleIfAsrTurn(asrTurn);
         } finally {
@@ -828,7 +871,17 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                     elapsedMillis(asrStartedAt),
                     exception.getMessage(),
                     exception);
-            trySendTurnErrorIfActive(webSocketSession, voiceSession, turnGeneration, "asr_failed", "语音识别失败");
+            sendRecoverableTurnError(
+                    webSocketSession,
+                    voiceSession,
+                    turnGeneration,
+                    "asr_failed",
+                    "语音识别失败",
+                    ASR_FAILED_PROMPT,
+                    elapsedMillis(asrStartedAt),
+                    0,
+                    SENTENCE_ASR_PROVIDER
+            );
             voiceSession.markIdleIfTurnActive(turnGeneration);
             return new Transcription(null, SENTENCE_ASR_PROVIDER, true);
         }
@@ -982,7 +1035,17 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                     deviceId,
                     exception.getMessage(),
                     exception);
-            trySendTurnErrorIfActive(webSocketSession, voiceSession, turnGeneration, "hermes_failed", "对话服务失败");
+            sendRecoverableTurnError(
+                    webSocketSession,
+                    voiceSession,
+                    turnGeneration,
+                    "hermes_failed",
+                    "对话服务失败",
+                    HERMES_FAILED_PROMPT,
+                    asrMillis,
+                    elapsedMillis(hermesStartedAt),
+                    asrProvider
+            );
             voiceSession.markIdleIfTurnActive(turnGeneration);
             return TurnResult.failure();
         }
@@ -1028,6 +1091,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         segmenter,
                         reply,
                         hermesStartedAt,
+                        asrProvider,
                         sentenceSink
                 )
         );
@@ -1065,6 +1129,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             XiaozhiSentenceSegmenter segmenter,
             StringBuilder reply,
             long hermesStartedAt,
+            String asrProvider,
             XiaozhiTtsSentenceSink sentenceSink
     ) {
         String reminderConfirmationText = null;
@@ -1099,9 +1164,15 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             }
             log.warn("xiaozhi hermes failed, sessionId={}, deviceId={}, message={}",
                     webSocketSession.getId(), deviceId, exception.getMessage(), exception);
-            trySendTurnErrorIfActive(webSocketSession, voiceSession, turnGeneration, "hermes_failed", "对话服务失败");
-            voiceSession.markIdleIfTurnActive(turnGeneration);
-            throw new XiaozhiHermesStreamingException(exception);
+            throw new RecoverableTurnException(
+                    "hermes_failed",
+                    "对话服务失败",
+                    HERMES_FAILED_PROMPT,
+                    asrMillis,
+                    elapsedMillis(hermesStartedAt),
+                    asrProvider,
+                    exception
+            );
         }
         flushHermesSentences(
                 webSocketSession,
@@ -1370,6 +1441,19 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             return result.played() ? PlaybackResult.completed(result, ttsMillis) : PlaybackResult.cancelled(result, ttsMillis);
         } catch (XiaozhiTtsTurnCancelledException exception) {
             return PlaybackResult.cancelledBeforeRuntime();
+        } catch (RecoverableTurnException exception) {
+            sendRecoverableTurnError(
+                    webSocketSession,
+                    voiceSession,
+                    turnGeneration,
+                    exception.code(),
+                    exception.message(),
+                    exception.spokenMessage(),
+                    exception.asrMillis(),
+                    exception.hermesMillis(),
+                    exception.asrProvider()
+            );
+            return PlaybackResult.FAILED;
         } catch (XiaozhiHermesStreamingException exception) {
             return PlaybackResult.FAILED;
         } catch (RuntimeException exception) {
@@ -1495,6 +1579,58 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         voiceSession.markIdleIfTurnActive(turnGeneration);
     }
 
+    private PlaybackResult sendRecoverableTurnError(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long turnGeneration,
+            String code,
+            String message,
+            String spokenMessage,
+            long asrMillis,
+            long hermesMillis,
+            String asrProvider
+    ) {
+        if (!trySendTurnErrorIfActive(webSocketSession, voiceSession, turnGeneration, code, message)) {
+            return PlaybackResult.cancelledBeforeRuntime();
+        }
+        return sendRecoverableTurnTts(
+                webSocketSession,
+                voiceSession,
+                turnGeneration,
+                spokenMessage,
+                asrMillis,
+                hermesMillis,
+                asrProvider
+        );
+    }
+
+    private PlaybackResult sendRecoverableTurnTts(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            long turnGeneration,
+            String spokenMessage,
+            long asrMillis,
+            long hermesMillis,
+            String asrProvider
+    ) {
+        if (spokenMessage == null || spokenMessage.isBlank()) {
+            return PlaybackResult.cancelledBeforeRuntime();
+        }
+        var ttsStartedAt = System.nanoTime();
+        var playbackResult = speakWithRuntime(
+                webSocketSession,
+                voiceSession,
+                turnGeneration,
+                TurnGuard.none(),
+                List.of(spokenMessage),
+                ttsStartedAt,
+                "语音合成失败"
+        );
+        logTurnCompleted(webSocketSession, voiceSession, playbackResult, asrProvider, asrMillis, hermesMillis,
+                playbackResult.ttsMillis());
+        return playbackResult;
+    }
+
     private void sendTtsFailure(
             WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
@@ -1534,16 +1670,17 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         voiceSession.cancelPlayback();
     }
 
-    private void trySendTurnErrorIfActive(
+    private boolean trySendTurnErrorIfActive(
             WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
             long turnGeneration,
             String code,
             String message
     ) {
-        if (!turnCancelled(webSocketSession, voiceSession, turnGeneration)) {
-            trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), code, message));
+        if (turnCancelled(webSocketSession, voiceSession, turnGeneration)) {
+            return false;
         }
+        return trySendText(webSocketSession, eventFactory.error(voiceSession.sessionId(), code, message));
     }
 
     private boolean notificationCancelled(
@@ -1655,6 +1792,58 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
 
         private XiaozhiHermesStreamingException(Throwable cause) {
             super(cause);
+        }
+    }
+
+    private static final class RecoverableTurnException extends RuntimeException {
+
+        private final String code;
+        private final String message;
+        private final String spokenMessage;
+        private final long asrMillis;
+        private final long hermesMillis;
+        private final String asrProvider;
+
+        private RecoverableTurnException(
+                String code,
+                String message,
+                String spokenMessage,
+                long asrMillis,
+                long hermesMillis,
+                String asrProvider,
+                Throwable cause
+        ) {
+            super(cause);
+            this.code = code;
+            this.message = message;
+            this.spokenMessage = spokenMessage;
+            this.asrMillis = asrMillis;
+            this.hermesMillis = hermesMillis;
+            this.asrProvider = asrProvider;
+        }
+
+        private String code() {
+            return code;
+        }
+
+        private String message() {
+            return message;
+        }
+
+        private String spokenMessage() {
+            return spokenMessage;
+        }
+
+        private long asrMillis() {
+            return asrMillis;
+        }
+
+        private long hermesMillis() {
+            return hermesMillis;
+        }
+
+        private String asrProvider() {
+            return asrProvider;
         }
     }
 

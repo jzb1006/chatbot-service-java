@@ -347,6 +347,34 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldSpeakErrorPromptWhenHermesFailsAfterStreamingAsr() {
+        var sentenceSpeech = new RecordingSpeechToTextClient();
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("ping", "streaming-provider");
+        var serviceWithStreamingAsr = newService(
+                sentenceSpeech,
+                new FailingHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"hermes_failed\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
+                        "\"text\":\"对话服务暂时不可用，请稍后再试\""));
+        assertThat(session.getSentMessages())
+                .anySatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
+    }
+
+    @Test
     void shouldCompleteStreamingAsrWhenSessionCloses() {
         var streamingSpeech = new EndAwareStreamingSpeechToTextClient();
         var serviceWithStreamingAsr = newService(
@@ -1284,7 +1312,11 @@ class XiaozhiVoiceSessionServiceTest {
         assertThat(session.getSentMessages())
                 .filteredOn(TextMessage.class::isInstance)
                 .extracting(message -> message.getPayload().toString())
-                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""));
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
+                        "\"text\":\"我没听清，请再说一遍\""));
+        assertThat(session.getSentMessages())
+                .anySatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
     }
 
     @Test
@@ -1309,7 +1341,11 @@ class XiaozhiVoiceSessionServiceTest {
                 .filteredOn(TextMessage.class::isInstance)
                 .extracting(message -> message.getPayload().toString())
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"stt\"", "\"text\":\"ping\""))
-                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"hermes_failed\""));
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"hermes_failed\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
+                        "\"text\":\"对话服务暂时不可用，请稍后再试\""));
+        assertThat(session.getSentMessages())
+                .anySatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
     }
 
     @Test
@@ -1352,6 +1388,11 @@ class XiaozhiVoiceSessionServiceTest {
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"start\""))
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"stop\""))
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"tts_failed\""));
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
+                        "\"text\":\"语音合成失败\""));
         assertThat(serviceWithFailingTts.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
     }
 
@@ -1519,6 +1560,36 @@ class XiaozhiVoiceSessionServiceTest {
         assertThat(textPayloads(session))
                 .filteredOn(payload -> payload.contains("\"type\":\"tts\"") && payload.contains("\"state\":\"stop\""))
                 .hasSize(1);
+    }
+
+    @Test
+    void shouldSpeakErrorPromptWhenHermesFailsWithStreamingTtsEnabled() {
+        var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
+        var streamingTts = new RecordingStreamingTextToSpeechClient();
+        var runtime = new XiaozhiTtsRuntime(
+                new FakeTextToSpeechClient(),
+                streamingTts,
+                codec,
+                eventFactory
+        );
+        var serviceWithStreamingTts = newService(
+                new FakeSpeechToTextClient(),
+                new FailingHermesClient(),
+                runtime,
+                eventFactory
+        );
+        var session = openSession(serviceWithStreamingTts);
+
+        runSingleTurn(serviceWithStreamingTts, session);
+
+        assertThat(streamingTts.texts()).isEmpty();
+        assertThat(textPayloads(session))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"hermes_failed\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
+                        "\"text\":\"对话服务暂时不可用，请稍后再试\""));
+        assertThat(session.getSentMessages())
+                .anySatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
+        assertThat(serviceWithStreamingTts.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
     }
 
     @Test
