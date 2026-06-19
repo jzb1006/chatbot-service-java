@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.voice.TestWebSocketSession;
 import com.jzb.chatbot.voice.XiaozhiVoiceSession;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
+import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -13,7 +14,11 @@ import java.net.InetAddress;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketMessage;
 
 class XiaozhiMusicPlaybackRuntimeTest {
 
@@ -125,6 +130,50 @@ class XiaozhiMusicPlaybackRuntimeTest {
         assertThat(runtime.state("device-1").pauseSource()).isNull();
     }
 
+    @Test
+    void shouldSendErrorMessageWhenMusicSourceIsRejected() {
+        var properties = new XiaozhiMusicPlaybackProperties(
+                true,
+                "ffmpeg",
+                Duration.ofSeconds(3),
+                Duration.ofMinutes(5),
+                Set.of("example.com")
+        );
+        var runtime = new XiaozhiMusicPlaybackRuntime(
+                new MusicAudioSource(properties, host -> List.of(InetAddress.getByName("93.184.216.34"))),
+                new TestFfmpegMusicDecoder(),
+                new MusicFrameSender(new XiaozhiMessageCodec(new ObjectMapper())),
+                properties,
+                new XiaozhiServerEventFactory(new ObjectMapper())
+        );
+        var webSocketSession = new TextCapturingSession("ws-session-1");
+        var voiceSession = new XiaozhiVoiceSession("session-1");
+        voiceSession.updateHandshake(null, "device-1", "client-1", 1);
+
+        runtime.play(new XiaozhiMusicPlaybackRequest(
+                webSocketSession,
+                voiceSession,
+                "素颜",
+                "许嵩&何曼婷",
+                "https://car-lv.kuwo.cn/song.mp3"
+        ));
+
+        assertThat(webSocketSession.awaitTextMessage()).isTrue();
+        assertThat(textMessages(webSocketSession))
+                .anySatisfy(payload -> assertThat(payload)
+                        .contains("\"type\":\"error\"")
+                        .contains("\"code\":\"music_playback_failed\"")
+                        .contains("音乐播放失败：音频来源未授权"));
+    }
+
+    private List<String> textMessages(TestWebSocketSession session) {
+        return session.getSentMessages().stream()
+                .filter(TextMessage.class::isInstance)
+                .map(TextMessage.class::cast)
+                .map(TextMessage::getPayload)
+                .toList();
+    }
+
     private static final class TestFfmpegMusicDecoder extends FfmpegMusicDecoder {
 
         private TestFfmpegMusicDecoder() {
@@ -171,6 +220,31 @@ class XiaozhiMusicPlaybackRuntimeTest {
         @Override
         public boolean isAlive() {
             return false;
+        }
+    }
+
+    private static final class TextCapturingSession extends TestWebSocketSession {
+        private final CountDownLatch textMessageSent = new CountDownLatch(1);
+
+        private TextCapturingSession(String id) {
+            super(id);
+        }
+
+        @Override
+        public synchronized void sendMessage(WebSocketMessage<?> message) throws IOException {
+            super.sendMessage(message);
+            if (message instanceof TextMessage) {
+                textMessageSent.countDown();
+            }
+        }
+
+        private boolean awaitTextMessage() {
+            try {
+                return textMessageSent.await(1L, TimeUnit.SECONDS);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
         }
     }
 }

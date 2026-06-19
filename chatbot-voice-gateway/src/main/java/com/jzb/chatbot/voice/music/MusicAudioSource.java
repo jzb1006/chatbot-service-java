@@ -8,6 +8,7 @@ import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.Locale;
 
 /**
  * 音乐音频源。
@@ -46,7 +47,7 @@ public class MusicAudioSource {
             throw new IllegalArgumentException("music media_url host is required");
         }
         var allowedHosts = properties.allowedHosts();
-        if (allowedHosts == null || allowedHosts.isEmpty() || !allowedHosts.contains(host)) {
+        if (allowedHosts == null || allowedHosts.isEmpty() || !allowedHost(host)) {
             throw new IllegalArgumentException("music media_url host is not allowed");
         }
         validateResolvedAddresses(host);
@@ -78,6 +79,23 @@ public class MusicAudioSource {
             Thread.currentThread().interrupt();
             throw new IOException("interrupted while opening music media_url", exception);
         }
+    }
+
+    private boolean allowedHost(String host) {
+        var normalizedHost = normalizeHost(host);
+        return properties.allowedHosts().stream()
+                .map(this::normalizeHost)
+                .filter(allowedHost -> !allowedHost.isBlank())
+                .anyMatch(allowedHost -> normalizedHost.equals(allowedHost)
+                        || normalizedHost.endsWith("." + allowedHost));
+    }
+
+    private String normalizeHost(String host) {
+        var normalized = host == null ? "" : host.trim().toLowerCase(Locale.ROOT);
+        while (normalized.endsWith(".")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 
     private void validateResolvedAddresses(String host) {

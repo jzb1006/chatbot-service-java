@@ -42,6 +42,35 @@ class MusicAudioSourceTest {
     }
 
     @Test
+    void shouldAllowConfiguredDomainAndSubdomains() {
+        var source = new MusicAudioSource(new XiaozhiMusicPlaybackProperties(
+                true,
+                "ffmpeg",
+                Duration.ofSeconds(3),
+                Duration.ofMinutes(5),
+                Set.of("kuwo.cn")
+        ), host -> List.of(InetAddress.getByName("93.184.216.34")));
+
+        assertThat(source.validate("https://kuwo.cn/song.mp3").getHost()).isEqualTo("kuwo.cn");
+        assertThat(source.validate("https://car-lv.kuwo.cn/song.mp3").getHost()).isEqualTo("car-lv.kuwo.cn");
+    }
+
+    @Test
+    void shouldRejectHostThatOnlySharesDomainSuffixText() {
+        var source = new MusicAudioSource(new XiaozhiMusicPlaybackProperties(
+                true,
+                "ffmpeg",
+                Duration.ofSeconds(3),
+                Duration.ofMinutes(5),
+                Set.of("kuwo.cn")
+        ), host -> List.of(InetAddress.getByName("93.184.216.34")));
+
+        assertThatThrownBy(() -> source.validate("https://evilkuwo.cn/song.mp3"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("music media_url host is not allowed");
+    }
+
+    @Test
     void shouldRejectAllowedHostResolvedToPrivateAddress() {
         var source = new MusicAudioSource(new XiaozhiMusicPlaybackProperties(
                 true,

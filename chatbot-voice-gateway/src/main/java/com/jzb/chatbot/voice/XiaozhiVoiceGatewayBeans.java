@@ -294,9 +294,10 @@ public class XiaozhiVoiceGatewayBeans {
             MusicAudioSource audioSource,
             FfmpegMusicDecoder decoder,
             MusicFrameSender frameSender,
-            XiaozhiMusicPlaybackProperties properties
+            XiaozhiMusicPlaybackProperties properties,
+            XiaozhiServerEventFactory eventFactory
     ) {
-        return new XiaozhiMusicPlaybackRuntime(audioSource, decoder, frameSender, properties);
+        return new XiaozhiMusicPlaybackRuntime(audioSource, decoder, frameSender, properties, eventFactory);
     }
 
     @Bean

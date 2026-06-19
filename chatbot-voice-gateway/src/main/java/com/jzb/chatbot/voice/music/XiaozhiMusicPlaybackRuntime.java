@@ -1,11 +1,13 @@
 package com.jzb.chatbot.voice.music;
 
+import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
 import java.io.IOException;
 import java.net.URI;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.web.socket.TextMessage;
 
 /**
  * 小智音乐播放运行时。
@@ -25,6 +27,7 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
     private final FfmpegMusicDecoder decoder;
     private final MusicFrameSender frameSender;
     private final XiaozhiMusicPlaybackProperties properties;
+    private final XiaozhiServerEventFactory eventFactory;
     private final Map<String, PlaybackTask> tasks = new ConcurrentHashMap<>();
 
     public XiaozhiMusicPlaybackRuntime(
@@ -33,10 +36,21 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
             MusicFrameSender frameSender,
             XiaozhiMusicPlaybackProperties properties
     ) {
+        this(audioSource, decoder, frameSender, properties, null);
+    }
+
+    public XiaozhiMusicPlaybackRuntime(
+            MusicAudioSource audioSource,
+            FfmpegMusicDecoder decoder,
+            MusicFrameSender frameSender,
+            XiaozhiMusicPlaybackProperties properties,
+            XiaozhiServerEventFactory eventFactory
+    ) {
         this.audioSource = audioSource;
         this.decoder = decoder;
         this.frameSender = frameSender;
         this.properties = properties;
+        this.eventFactory = eventFactory;
     }
 
     public void play(XiaozhiMusicPlaybackRequest request) {
@@ -114,9 +128,35 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
         } catch (IOException | RuntimeException exception) {
             log.warn("xiaozhi music playback failed, deviceId={}, title={}, message={}",
                     deviceId, task.request.title(), exception.getMessage(), exception);
+            sendPlaybackFailure(task, exception);
         } finally {
             tasks.remove(deviceId, task);
         }
+    }
+
+    private void sendPlaybackFailure(PlaybackTask task, Exception exception) {
+        if (eventFactory == null || !task.request.webSocketSession().isOpen()) {
+            return;
+        }
+        var sessionId = task.request.voiceSession().sessionId();
+        var message = userFriendlyFailureMessage(exception);
+        try {
+            task.request.webSocketSession().sendMessage(new TextMessage(
+                    eventFactory.error(sessionId, "music_playback_failed", message)
+            ));
+        } catch (IOException sendException) {
+            log.warn("xiaozhi music playback failure event send failed, deviceId={}, title={}, message={}",
+                    task.request.voiceSession().deviceId(), task.request.title(), sendException.getMessage(),
+                    sendException);
+        }
+    }
+
+    private String userFriendlyFailureMessage(Exception exception) {
+        if (exception instanceof IllegalArgumentException
+                && "music media_url host is not allowed".equals(exception.getMessage())) {
+            return "音乐播放失败：音频来源未授权";
+        }
+        return "音乐播放失败：音频暂时无法播放";
     }
 
     private String mediaHost(String mediaUrl) {
