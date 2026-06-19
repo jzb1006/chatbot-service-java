@@ -166,6 +166,54 @@ class XiaozhiMusicPlaybackRuntimeTest {
                         .contains("音乐播放失败：音频来源未授权"));
     }
 
+    @Test
+    void shouldWrapMusicBinaryFramesWithMediaLifecycleEvents() {
+        var properties = new XiaozhiMusicPlaybackProperties(
+                true,
+                "ffmpeg",
+                Duration.ofSeconds(3),
+                Duration.ofMinutes(5),
+                Set.of("example.com")
+        );
+        var runtime = new XiaozhiMusicPlaybackRuntime(
+                new TestMusicAudioSource(properties),
+                new TestFfmpegMusicDecoder(new byte[16000 / 1000 * 60 * Short.BYTES]),
+                new MusicFrameSender(new XiaozhiMessageCodec(new ObjectMapper())),
+                properties,
+                new XiaozhiServerEventFactory(new ObjectMapper())
+        );
+        var webSocketSession = new MessageCountingSession("ws-session-1");
+        var voiceSession = new XiaozhiVoiceSession("session-1");
+        voiceSession.updateHandshake(null, "device-1", "client-1", 1);
+
+        runtime.play(new XiaozhiMusicPlaybackRequest(
+                webSocketSession,
+                voiceSession,
+                "晴天",
+                "周杰伦",
+                "https://example.com/qingtian.mp3"
+        ));
+
+        assertThat(webSocketSession.awaitMessages(3)).isTrue();
+        assertThat(runtime.state("device-1").status()).isEqualTo(XiaozhiMusicPlaybackState.Status.STOPPED);
+        assertThat(webSocketSession.getSentMessages().get(0)).isInstanceOf(TextMessage.class);
+        assertThat(((TextMessage) webSocketSession.getSentMessages().get(0)).getPayload())
+                .contains("\"type\":\"media\"")
+                .contains("\"state\":\"start\"")
+                .contains("\"kind\":\"music\"")
+                .contains("\"title\":\"晴天\"")
+                .contains("\"artist\":\"周杰伦\"");
+        assertThat(webSocketSession.getSentMessages()).anySatisfy(message ->
+                assertThat(message).isInstanceOf(org.springframework.web.socket.BinaryMessage.class));
+        assertThat(webSocketSession.getSentMessages().get(webSocketSession.getSentMessages().size() - 1))
+                .isInstanceOf(TextMessage.class);
+        assertThat(((TextMessage) webSocketSession.getSentMessages().get(
+                webSocketSession.getSentMessages().size() - 1)).getPayload())
+                .contains("\"type\":\"media\"")
+                .contains("\"state\":\"stop\"")
+                .contains("\"kind\":\"music\"");
+    }
+
     private List<String> textMessages(TestWebSocketSession session) {
         return session.getSentMessages().stream()
                 .filter(TextMessage.class::isInstance)
@@ -174,15 +222,34 @@ class XiaozhiMusicPlaybackRuntimeTest {
                 .toList();
     }
 
+    private static final class TestMusicAudioSource extends MusicAudioSource {
+
+        private TestMusicAudioSource(XiaozhiMusicPlaybackProperties properties) {
+            super(properties, host -> List.of(InetAddress.getByName("93.184.216.34")));
+        }
+
+        @Override
+        public OpenedMusic open(String mediaUrl) {
+            return new OpenedMusic(java.net.URI.create(mediaUrl), InputStream.nullInputStream());
+        }
+    }
+
     private static final class TestFfmpegMusicDecoder extends FfmpegMusicDecoder {
 
+        private final byte[] pcm;
+
         private TestFfmpegMusicDecoder() {
+            this(new byte[0]);
+        }
+
+        private TestFfmpegMusicDecoder(byte[] pcm) {
             super("ffmpeg");
+            this.pcm = pcm;
         }
 
         @Override
         public DecodedMusic decode(InputStream mediaStream) {
-            return new DecodedMusic(new DummyProcess(), new ByteArrayInputStream(new byte[0]));
+            return new DecodedMusic(new DummyProcess(), new ByteArrayInputStream(pcm));
         }
     }
 
@@ -241,6 +308,35 @@ class XiaozhiMusicPlaybackRuntimeTest {
         private boolean awaitTextMessage() {
             try {
                 return textMessageSent.await(1L, TimeUnit.SECONDS);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+    }
+
+    private static final class MessageCountingSession extends TestWebSocketSession {
+        private final CountDownLatch messagesSent;
+
+        private MessageCountingSession(String id) {
+            super(id);
+            this.messagesSent = new CountDownLatch(3);
+        }
+
+        @Override
+        public synchronized void sendMessage(WebSocketMessage<?> message) throws IOException {
+            super.sendMessage(message);
+            messagesSent.countDown();
+        }
+
+        private boolean awaitMessages(int expectedCount) {
+            try {
+                while (getSentMessages().size() < expectedCount) {
+                    if (!messagesSent.await(1L, TimeUnit.SECONDS)) {
+                        return false;
+                    }
+                }
+                return true;
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
                 return false;

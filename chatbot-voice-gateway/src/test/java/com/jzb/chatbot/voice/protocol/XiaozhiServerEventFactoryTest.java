@@ -39,4 +39,26 @@ class XiaozhiServerEventFactoryTest {
         assertThat(json).contains("\"type\":\"mcp\"");
         assertThat(json).contains("\"method\":\"tools/list\"");
     }
+
+    @Test
+    void shouldBuildMusicMediaStartEvent() {
+        var json = factory.mediaStart("s1", "music", "晴天", "周杰伦");
+
+        assertThat(json).contains("\"session_id\":\"s1\"");
+        assertThat(json).contains("\"type\":\"media\"");
+        assertThat(json).contains("\"state\":\"start\"");
+        assertThat(json).contains("\"kind\":\"music\"");
+        assertThat(json).contains("\"title\":\"晴天\"");
+        assertThat(json).contains("\"artist\":\"周杰伦\"");
+    }
+
+    @Test
+    void shouldBuildMusicMediaStopEvent() {
+        var json = factory.mediaStop("s1", "music");
+
+        assertThat(json).contains("\"session_id\":\"s1\"");
+        assertThat(json).contains("\"type\":\"media\"");
+        assertThat(json).contains("\"state\":\"stop\"");
+        assertThat(json).contains("\"kind\":\"music\"");
+    }
 }

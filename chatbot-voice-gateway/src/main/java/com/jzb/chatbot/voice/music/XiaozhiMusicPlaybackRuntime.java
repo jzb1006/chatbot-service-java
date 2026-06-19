@@ -119,7 +119,10 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
                         decoded.pcmStream(),
                         task::paused,
                         () -> task.cancelled() || expired(deadline),
-                        task::markSending,
+                        () -> {
+                            sendMediaStartOnce(task);
+                            task.markSending();
+                        },
                         task::markIdle
                 );
                 log.info("xiaozhi music playback finished, deviceId={}, title={}, sentFrames={}",
@@ -130,7 +133,41 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
                     deviceId, task.request.title(), exception.getMessage(), exception);
             sendPlaybackFailure(task, exception);
         } finally {
+            sendMediaStop(task);
             tasks.remove(deviceId, task);
+        }
+    }
+
+    private void sendMediaStartOnce(PlaybackTask task) {
+        if (task.mediaStarted() || eventFactory == null) {
+            return;
+        }
+        try {
+            task.request.webSocketSession().sendMessage(new TextMessage(eventFactory.mediaStart(
+                    task.request.voiceSession().sessionId(),
+                    "music",
+                    task.request.title(),
+                    task.request.artist()
+            )));
+            task.markMediaStarted();
+        } catch (IOException exception) {
+            throw new IllegalStateException("failed to send xiaozhi music start event", exception);
+        }
+    }
+
+    private void sendMediaStop(PlaybackTask task) {
+        if (eventFactory == null || !task.mediaStarted() || !task.request.webSocketSession().isOpen()) {
+            return;
+        }
+        try {
+            task.request.webSocketSession().sendMessage(new TextMessage(eventFactory.mediaStop(
+                    task.request.voiceSession().sessionId(),
+                    "music"
+            )));
+        } catch (IOException exception) {
+            log.warn("xiaozhi music playback stop event send failed, deviceId={}, title={}, message={}",
+                    task.request.voiceSession().deviceId(), task.request.title(), exception.getMessage(),
+                    exception);
         }
     }
 
@@ -181,6 +218,7 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
         private final AtomicBoolean sending = new AtomicBoolean();
         private final AtomicBoolean manualPaused = new AtomicBoolean();
         private final AtomicBoolean ttsPaused = new AtomicBoolean();
+        private final AtomicBoolean mediaStarted = new AtomicBoolean();
 
         private PlaybackTask(
                 XiaozhiMusicPlaybackRequest request,
@@ -220,6 +258,14 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
 
         private void markSending() {
             sending.set(true);
+        }
+
+        private void markMediaStarted() {
+            mediaStarted.set(true);
+        }
+
+        private boolean mediaStarted() {
+            return mediaStarted.get();
         }
 
         private void markIdle() {

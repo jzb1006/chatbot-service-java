@@ -78,6 +78,30 @@ public class XiaozhiServerEventFactory {
         return root.toString();
     }
 
+    public String mediaStart(String sessionId, String kind, String title, String artist) {
+        var root = objectMapper.createObjectNode()
+                .put("session_id", sessionId)
+                .put("type", "media")
+                .put("state", "start")
+                .put("kind", kind);
+        if (title != null && !title.isBlank()) {
+            root.put("title", title);
+        }
+        if (artist != null && !artist.isBlank()) {
+            root.put("artist", artist);
+        }
+        return root.toString();
+    }
+
+    public String mediaStop(String sessionId, String kind) {
+        return objectMapper.createObjectNode()
+                .put("session_id", sessionId)
+                .put("type", "media")
+                .put("state", "stop")
+                .put("kind", kind)
+                .toString();
+    }
+
     private String ttsState(String sessionId, String state) {
         return objectMapper.createObjectNode()
                 .put("session_id", sessionId)
