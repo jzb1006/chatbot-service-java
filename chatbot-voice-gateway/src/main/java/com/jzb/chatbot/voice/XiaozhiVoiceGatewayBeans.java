@@ -35,6 +35,7 @@ import com.jzb.chatbot.voice.mcp.XiaozhiMcpAdminAuth;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
+import com.jzb.chatbot.voice.sessionend.XiaozhiSessionEndProperties;
 import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime;
 import com.jzb.chatbot.voice.tts.XiaozhiVoiceProfileResolver;
 import java.io.IOException;
@@ -118,6 +119,17 @@ public class XiaozhiVoiceGatewayBeans {
     @Bean
     XiaozhiBargeInDetector xiaozhiBargeInDetector(XiaozhiBargeInProperties properties) {
         return new XiaozhiBargeInDetector(properties);
+    }
+
+    @Bean
+    XiaozhiSessionEndProperties xiaozhiSessionEndProperties(Environment environment) {
+        var binder = Binder.get(environment);
+        return new XiaozhiSessionEndProperties(
+                binder.bind("chatbot.voice.session-end.enabled", Boolean.class).orElse(false),
+                binder.bind("chatbot.voice.session-end.default-confirmation-text", String.class).orElse("回头再聊"),
+                binder.bind("chatbot.voice.session-end.close-status-code", Integer.class).orElse(1000),
+                binder.bind("chatbot.voice.session-end.close-reason", String.class).orElse("session ended")
+        );
     }
 
     @Bean

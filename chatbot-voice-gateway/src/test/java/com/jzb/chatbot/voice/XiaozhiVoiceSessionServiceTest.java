@@ -37,6 +37,7 @@ import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
 import com.jzb.chatbot.voice.reminder.XiaozhiReminderRequestedEvent;
+import com.jzb.chatbot.voice.sessionend.XiaozhiSessionEndProperties;
 import com.jzb.chatbot.voice.tts.XiaozhiTtsRequest;
 import com.jzb.chatbot.voice.tts.XiaozhiTtsResult;
 import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime;
@@ -657,6 +658,120 @@ class XiaozhiVoiceSessionServiceTest {
         runSingleTurn(serviceWithReminder, session);
 
         assertThat(ttsClient.texts()).containsExactly("1分钟后提醒你喝水");
+    }
+
+    @Test
+    void shouldSpeakGoodbyeAndCloseWebSocketWhenHermesRequestsSessionEnd() {
+        var hermesClient = new StaticSseHermesClient("""
+                event: xiaozhi.agent_event
+                data: {"action":"session_end","confirmation_text":"回头再聊","reason":"user_requested_exit"}
+
+                """);
+        var ttsClient = new RecordingTextToSpeechClient();
+        var serviceWithSessionEnd = newServiceWithSessionEnd(hermesClient, ttsClient, true);
+        var session = openSession(serviceWithSessionEnd);
+
+        runSingleTurn(serviceWithSessionEnd, session);
+
+        assertThat(session.isOpen()).isFalse();
+        assertThat(session.getCloseStatus()).isNotNull();
+        assertThat(session.getCloseStatus().getCode()).isEqualTo(1000);
+        assertThat(ttsClient.texts()).containsExactly("回头再聊");
+        assertThat(textPayloads(session)).anySatisfy(payload -> assertThat(payload)
+                .contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "\"text\":\"回头再聊\""));
+    }
+
+    @Test
+    void shouldCloseWebSocketWhenBargeInTextIsSessionEndIntent() {
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("退出吧", "streaming-provider");
+        var hermesClient = new StaticSseHermesClient("""
+                event: xiaozhi.agent_event
+                data: {"action":"session_end","confirmation_text":"回头再聊","reason":"user_requested_exit"}
+
+                """);
+        var ttsClient = new RecordingTextToSpeechClient();
+        var serviceWithSessionEnd = newServiceWithBargeInAndSessionEnd(hermesClient, streamingSpeech, ttsClient);
+        var session = openSession(serviceWithSessionEnd);
+        var voiceSession = serviceWithSessionEnd.getSession(session.getId());
+        voiceSession.markSpeaking();
+        voiceSession.updateCurrentSpeakingText("这是一段正在播放的回答。");
+
+        serviceWithSessionEnd.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "barge_in", null, null, "ws-session-1", null
+        ));
+        serviceWithSessionEnd.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", "barge_in", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitClosed(session)).isTrue();
+        assertThat(ttsClient.texts()).containsExactly("回头再聊");
+    }
+
+    @Test
+    void shouldNotCloseWebSocketWhenBargeInControlIntentIsMusicStop() {
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("停止播放", "streaming-provider");
+        var hermesClient = new StaticSseHermesClient("""
+                event: xiaozhi.agent_event
+                data: {"action":"music_stop","confirmation_text":"已停止播放"}
+
+                """);
+        var ttsClient = new RecordingTextToSpeechClient();
+        var musicRuntime = new CapturingMusicPlaybackRuntime();
+        var serviceWithSessionEnd = newServiceWithBargeInAndSessionEnd(
+                hermesClient,
+                streamingSpeech,
+                ttsClient,
+                musicRuntime
+        );
+        var session = openSession(serviceWithSessionEnd);
+        var voiceSession = serviceWithSessionEnd.getSession(session.getId());
+        voiceSession.markSpeaking();
+        voiceSession.updateCurrentSpeakingText("这是一段正在播放的回答。");
+
+        serviceWithSessionEnd.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "barge_in", null, null, "ws-session-1", null
+        ));
+        serviceWithSessionEnd.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", "barge_in", null, null, "ws-session-1", null
+        ));
+
+        assertThat(session.isOpen()).isTrue();
+        assertThat(ttsClient.texts()).isEmpty();
+        assertThat(awaitMusicStop(musicRuntime, "stop:ws-session-1")).isTrue();
+    }
+
+    @Test
+    void shouldHandleBargeInMusicStopWhenSessionEndIsDisabled() {
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("停止播放", "streaming-provider");
+        var hermesClient = new StaticSseHermesClient("""
+                event: xiaozhi.agent_event
+                data: {"action":"music_stop","confirmation_text":"已停止播放"}
+
+                """);
+        var ttsClient = new RecordingTextToSpeechClient();
+        var musicRuntime = new CapturingMusicPlaybackRuntime();
+        var serviceWithMusic = newServiceWithBargeInControlIntent(
+                hermesClient,
+                streamingSpeech,
+                ttsClient,
+                musicRuntime,
+                false
+        );
+        var session = openSession(serviceWithMusic);
+        var voiceSession = serviceWithMusic.getSession(session.getId());
+        voiceSession.markSpeaking();
+        voiceSession.updateCurrentSpeakingText("这是一段正在播放的回答。");
+
+        serviceWithMusic.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "barge_in", null, null, "ws-session-1", null
+        ));
+        serviceWithMusic.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", "barge_in", null, null, "ws-session-1", null
+        ));
+
+        assertThat(session.isOpen()).isTrue();
+        assertThat(ttsClient.texts()).isEmpty();
+        assertThat(awaitMusicStop(musicRuntime, "stop:ws-session-1")).isTrue();
     }
 
     @Test
@@ -2298,6 +2413,88 @@ class XiaozhiVoiceSessionServiceTest {
         );
     }
 
+    private XiaozhiVoiceSessionService newServiceWithSessionEnd(
+            HermesClient hermesClient,
+            TextToSpeechClient textToSpeechClient,
+            boolean enabled
+    ) {
+        var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
+        return new XiaozhiVoiceSessionService(
+                codec,
+                new FakeSpeechToTextClient(),
+                hermesClient,
+                new XiaozhiTtsRuntime(textToSpeechClient, codec, eventFactory),
+                eventFactory,
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge(),
+                new XiaozhiAsrMode("sentence"),
+                new FakeStreamingSpeechToTextClient(),
+                XiaozhiAudioParams.defaults(),
+                new XiaozhiVoiceProfileResolver(new VoiceId("default"), 1.0, 1.0),
+                new XiaozhiBargeInDetector(new XiaozhiBargeInProperties(false, 2, 500, 0.82, Duration.ofSeconds(2))),
+                (XiaozhiMusicActionHandler) null,
+                (XiaozhiMusicPlaybackRuntime) null,
+                new XiaozhiSessionEndProperties(enabled, "回头再聊", 1000, "session ended")
+        );
+    }
+
+    private XiaozhiVoiceSessionService newServiceWithBargeInAndSessionEnd(
+            HermesClient hermesClient,
+            StreamingSpeechToTextClient streamingSpeechToTextClient,
+            TextToSpeechClient textToSpeechClient
+    ) {
+        return newServiceWithBargeInAndSessionEnd(
+                hermesClient,
+                streamingSpeechToTextClient,
+                textToSpeechClient,
+                null
+        );
+    }
+
+    private XiaozhiVoiceSessionService newServiceWithBargeInAndSessionEnd(
+            HermesClient hermesClient,
+            StreamingSpeechToTextClient streamingSpeechToTextClient,
+            TextToSpeechClient textToSpeechClient,
+            XiaozhiMusicPlaybackRuntime musicRuntime
+    ) {
+        return newServiceWithBargeInControlIntent(
+                hermesClient,
+                streamingSpeechToTextClient,
+                textToSpeechClient,
+                musicRuntime,
+                true
+        );
+    }
+
+    private XiaozhiVoiceSessionService newServiceWithBargeInControlIntent(
+            HermesClient hermesClient,
+            StreamingSpeechToTextClient streamingSpeechToTextClient,
+            TextToSpeechClient textToSpeechClient,
+            XiaozhiMusicPlaybackRuntime musicRuntime,
+            boolean sessionEndEnabled
+    ) {
+        var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
+        return new XiaozhiVoiceSessionService(
+                codec,
+                new FakeSpeechToTextClient(),
+                hermesClient,
+                new XiaozhiTtsRuntime(textToSpeechClient, codec, eventFactory),
+                eventFactory,
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner"),
+                new XiaozhiVoiceTokenAuth(""),
+                newMcpBridge(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeechToTextClient,
+                XiaozhiAudioParams.defaults(),
+                new XiaozhiVoiceProfileResolver(new VoiceId("default"), 1.0, 1.0),
+                new XiaozhiBargeInDetector(new XiaozhiBargeInProperties(true, 2, 0, 0.82, Duration.ofMillis(200))),
+                musicRuntime == null ? null : new XiaozhiMusicActionHandler(musicRuntime),
+                musicRuntime,
+                new XiaozhiSessionEndProperties(sessionEndEnabled, "回头再聊", 1000, "session ended")
+        );
+    }
+
     private XiaozhiVoiceSessionService newService(
             SpeechToTextClient speechToTextClient,
             HermesClient hermesClient,
@@ -2399,6 +2596,38 @@ class XiaozhiVoiceSessionServiceTest {
             }
         }
         return service.getSession(session.getId()).state() == XiaozhiVoiceSession.State.IDLE;
+    }
+
+    private boolean awaitClosed(TestWebSocketSession session) {
+        var deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+        while (System.nanoTime() < deadline) {
+            if (!session.isOpen()) {
+                return true;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return !session.isOpen();
+    }
+
+    private boolean awaitMusicStop(CapturingMusicPlaybackRuntime musicRuntime, String event) {
+        var deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+        while (System.nanoTime() < deadline) {
+            if (musicRuntime.events().contains(event)) {
+                return true;
+            }
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return musicRuntime.events().contains(event);
     }
 
     private List<String> textPayloads(TestWebSocketSession session) {

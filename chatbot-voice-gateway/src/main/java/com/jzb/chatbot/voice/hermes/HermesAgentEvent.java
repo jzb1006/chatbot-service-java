@@ -16,6 +16,7 @@ public record HermesAgentEvent(
         String mediaUrl,
         String title,
         String artist,
-        long positionSeconds
+        long positionSeconds,
+        String reason
 ) {
 }

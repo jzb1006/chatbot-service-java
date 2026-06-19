@@ -46,6 +46,11 @@ chatbot:
       cooldown-ms: ${CHATBOT_VOICE_BARGE_IN_COOLDOWN_MS:500}
       similarity-threshold: ${CHATBOT_VOICE_BARGE_IN_SIMILARITY_THRESHOLD:0.82}
       asr-timeout: ${CHATBOT_VOICE_BARGE_IN_ASR_TIMEOUT:2s}
+    session-end:
+      enabled: ${CHATBOT_VOICE_SESSION_END_ENABLED:false}
+      default-confirmation-text: ${CHATBOT_VOICE_SESSION_END_DEFAULT_CONFIRMATION_TEXT:回头再聊}
+      close-status-code: ${CHATBOT_VOICE_SESSION_END_CLOSE_STATUS_CODE:1000}
+      close-reason: ${CHATBOT_VOICE_SESSION_END_CLOSE_REASON:session ended}
     music:
       enabled: ${CHATBOT_VOICE_MUSIC_ENABLED:false}
       ffmpeg-path: ${CHATBOT_VOICE_MUSIC_FFMPEG_PATH:ffmpeg}

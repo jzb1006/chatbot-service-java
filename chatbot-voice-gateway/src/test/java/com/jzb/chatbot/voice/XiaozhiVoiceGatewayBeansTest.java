@@ -25,6 +25,7 @@ import com.jzb.chatbot.voice.mcp.XiaozhiMcpAdminAuth;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
+import com.jzb.chatbot.voice.sessionend.XiaozhiSessionEndProperties;
 import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime;
 import com.jzb.chatbot.voice.tts.XiaozhiVoiceProfileResolver;
 import java.nio.file.Files;
@@ -112,6 +113,39 @@ class XiaozhiVoiceGatewayBeansTest {
             assertThat(context).hasSingleBean(XiaozhiBargeInProperties.class);
             assertThat(context.getBean(XiaozhiBargeInProperties.class).enabled()).isFalse();
         });
+    }
+
+    @Test
+    void shouldCreateSessionEndPropertiesWithDefaultDisabled() {
+        contextRunner.run(context -> {
+            assertThat(context).hasSingleBean(XiaozhiSessionEndProperties.class);
+
+            var properties = context.getBean(XiaozhiSessionEndProperties.class);
+
+            assertThat(properties.enabled()).isFalse();
+            assertThat(properties.defaultConfirmationText()).isEqualTo("回头再聊");
+            assertThat(properties.closeStatusCode()).isEqualTo(1000);
+            assertThat(properties.closeReason()).isEqualTo("session ended");
+        });
+    }
+
+    @Test
+    void shouldCreateConfiguredSessionEndProperties() {
+        contextRunner
+                .withPropertyValues(
+                        "chatbot.voice.session-end.enabled=true",
+                        "chatbot.voice.session-end.default-confirmation-text=下次再聊",
+                        "chatbot.voice.session-end.close-status-code=1000",
+                        "chatbot.voice.session-end.close-reason=user requested exit"
+                )
+                .run(context -> {
+                    var properties = context.getBean(XiaozhiSessionEndProperties.class);
+
+                    assertThat(properties.enabled()).isTrue();
+                    assertThat(properties.defaultConfirmationText()).isEqualTo("下次再聊");
+                    assertThat(properties.closeStatusCode()).isEqualTo(1000);
+                    assertThat(properties.closeReason()).isEqualTo("user requested exit");
+                });
     }
 
     @Test

@@ -27,6 +27,24 @@ class XiaozhiHermesAgentEventTextFilterTest {
     }
 
     @Test
+    void shouldExtractEmbeddedSessionEndEventAndSuppressEventText() {
+        var filter = new XiaozhiHermesAgentEventTextFilter();
+
+        var result = filter.accept("""
+                event: xiaozhi.agent_event
+                data: {"action":"session_end","confirmation_text":"回头再聊","reason":"user_requested_exit"}
+
+                """);
+
+        assertThat(result.text()).isEmpty();
+        assertThat(result.events()).singleElement().satisfies(event -> {
+            assertThat(event.action()).isEqualTo("session_end");
+            assertThat(event.confirmationText()).isEqualTo("回头再聊");
+            assertThat(event.reason()).isEqualTo("user_requested_exit");
+        });
+    }
+
+    @Test
     void shouldHoldPartialMarkerAcrossTextDeltas() {
         var filter = new XiaozhiHermesAgentEventTextFilter();
 

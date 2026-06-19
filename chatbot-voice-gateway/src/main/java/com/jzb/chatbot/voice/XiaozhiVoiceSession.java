@@ -444,6 +444,25 @@ public class XiaozhiVoiceSession {
         return true;
     }
 
+    public synchronized boolean prepareSessionEndPlayback() {
+        if (state == State.IDLE) {
+            return false;
+        }
+        abortedTurnGeneration = turnGeneration;
+        if (playback != null) {
+            playback.cancel();
+            playback = null;
+        }
+        terminateAsrStreamLocked();
+        clearBargeInTurnLocked();
+        clearCurrentSpeakingLocked();
+        audioFrames.clear();
+        activePlaybackGeneration = NO_PLAYBACK_GENERATION;
+        turnGeneration++;
+        state = State.PROCESSING;
+        return true;
+    }
+
     public void writeAudioFrameToBargeIn(XiaozhiAudioFrame frame) {
         var currentTurn = activeBargeInTurn();
         if (currentTurn == null || frame == null) {

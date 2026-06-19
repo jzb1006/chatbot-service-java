@@ -23,7 +23,31 @@ class HermesAgentEventExtractorTest {
                 null,
                 null,
                 null,
-                0L
+                0L,
+                null
+        ));
+    }
+
+    @Test
+    void shouldExtractSessionEndEventFromHermesSse() {
+        var extractor = new HermesAgentEventExtractor();
+
+        var events = extractor.accept("""
+                event: xiaozhi.agent_event
+                data: {"action":"session_end","confirmation_text":"回头再聊","reason":"user_requested_exit"}
+
+                """);
+
+        assertThat(events).containsExactly(new HermesAgentEvent(
+                "session_end",
+                null,
+                0L,
+                "回头再聊",
+                null,
+                null,
+                null,
+                0L,
+                "user_requested_exit"
         ));
     }
 
@@ -45,7 +69,8 @@ class HermesAgentEventExtractorTest {
                 "https://example.com/daoxiang.mp3",
                 "稻香",
                 "周杰伦",
-                0L
+                0L,
+                null
         ));
     }
 
@@ -75,7 +100,8 @@ class HermesAgentEventExtractorTest {
                 null,
                 null,
                 null,
-                0L
+                0L,
+                null
         ));
     }
 }

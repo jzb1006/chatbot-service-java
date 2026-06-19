@@ -81,6 +81,26 @@ class XiaozhiVoiceSessionTest {
         assertThat(session.state()).isEqualTo(XiaozhiVoiceSession.State.LISTENING);
     }
 
+    @Test
+    void shouldPrepareSessionEndPlaybackFromSpeaking() {
+        var session = new XiaozhiVoiceSession("session-1");
+        session.markSpeaking();
+        session.updateCurrentSpeakingText("这是一段正在播放的回答。");
+
+        assertThat(session.prepareSessionEndPlayback()).isTrue();
+
+        assertThat(session.state()).isEqualTo(XiaozhiVoiceSession.State.PROCESSING);
+        assertThat(session.currentSpeakingText()).isEmpty();
+    }
+
+    @Test
+    void shouldIgnoreSessionEndPlaybackWhenAlreadyIdle() {
+        var session = new XiaozhiVoiceSession("session-1");
+
+        assertThat(session.prepareSessionEndPlayback()).isFalse();
+        assertThat(session.state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
     private XiaozhiTtsPlayback newPlayback(XiaozhiVoiceSession session) {
         return new XiaozhiTtsPlayback(
                 new TestWebSocketSession(session.sessionId()),
