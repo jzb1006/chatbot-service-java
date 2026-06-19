@@ -3,6 +3,8 @@ package com.jzb.chatbot.speech;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.tencent.asrv2.SpeechRecognizer;
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -457,6 +459,34 @@ class TencentRealtimeSpeechToTextClientTest {
         assertThat(factory.closed).isTrue();
     }
 
+
+    @Test
+    void shouldOmitInputSampleRateFor16kRealtimePcmRequest() {
+        var factory = new TencentSdkRealtimeSpeechRecognizerFactory();
+        var recognizer = factory.create(validConfig(), new NoopRecognitionListener());
+
+        try {
+            var request = sdkRecognizer(recognizer).getRequest();
+
+            assertThat(request.getEngineModelType()).isEqualTo("16k_zh");
+            assertThat(request.getVoiceFormat()).isEqualTo(1);
+            assertThat(request.getInputSampleRate()).isNull();
+        } finally {
+            recognizer.close();
+            factory.close();
+        }
+    }
+
+    private SpeechRecognizer sdkRecognizer(TencentRealtimeSpeechRecognizer recognizer) {
+        try {
+            Field field = TencentSdkRealtimeSpeechRecognizer.class.getDeclaredField("sdkRecognizer");
+            field.setAccessible(true);
+            return (SpeechRecognizer) field.get(recognizer);
+        } catch (ReflectiveOperationException exception) {
+            throw new AssertionError("Failed to read Tencent SDK recognizer", exception);
+        }
+    }
+
     private TencentRealtimeSpeechToTextConfig validConfig() {
         return new TencentRealtimeSpeechToTextConfig(
                 "app-id",
@@ -467,6 +497,22 @@ class TencentRealtimeSpeechToTextClientTest {
                 Duration.ofMillis(10),
                 Duration.ofSeconds(3)
         );
+    }
+
+
+    private static final class NoopRecognitionListener implements TencentRealtimeSpeechRecognitionListener {
+
+        @Override
+        public void onSentenceEnd(String text) {
+        }
+
+        @Override
+        public void onComplete(String text) {
+        }
+
+        @Override
+        public void onFail(String message) {
+        }
     }
 
     private static final class CapturingRecognizerFactory implements TencentRealtimeSpeechRecognizerFactory, AutoCloseable {

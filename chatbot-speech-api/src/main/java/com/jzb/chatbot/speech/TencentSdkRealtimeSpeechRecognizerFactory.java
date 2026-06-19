@@ -18,6 +18,7 @@ class TencentSdkRealtimeSpeechRecognizerFactory implements TencentRealtimeSpeech
 
     private static final String WS_API_URL = "wss://asr.cloud.tencent.com/asr/v2/";
     private static final int PCM_VOICE_FORMAT = 1;
+    private static final int EIGHT_KHZ_SAMPLE_RATE = 8000;
 
     private final SpeechClient speechClient = new SpeechClient(WS_API_URL);
 
@@ -29,7 +30,9 @@ class TencentSdkRealtimeSpeechRecognizerFactory implements TencentRealtimeSpeech
         var request = SpeechRecognizerRequest.init();
         request.setEngineModelType(config.engineModelType());
         request.setVoiceFormat(PCM_VOICE_FORMAT);
-        request.setInputSampleRate(config.sampleRate());
+        if (config.sampleRate() == EIGHT_KHZ_SAMPLE_RATE) {
+            request.setInputSampleRate(EIGHT_KHZ_SAMPLE_RATE);
+        }
         request.setVoiceId(UUID.randomUUID().toString());
         var credential = new Credential(config.appId(), config.secretId(), config.secretKey());
         try {
