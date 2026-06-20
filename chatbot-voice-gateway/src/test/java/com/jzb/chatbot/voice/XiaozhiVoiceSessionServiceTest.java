@@ -343,9 +343,9 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
-    void shouldSendXiaozhiSkillInstructionsToHermesForStreamingReminderIntent() {
+    void shouldSendXiaozhiSkillInstructionsToHermesForUnparsedStreamingReminderIntent() {
         var hermesClient = new CapturingHermesClient();
-        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("一分钟后提醒我喝水。", "streaming-provider");
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("明天早上提醒我喝水。", "streaming-provider");
         var serviceWithStreamingAsr = newService(
                 new RecordingSpeechToTextClient(),
                 hermesClient,
@@ -363,7 +363,38 @@ class XiaozhiVoiceSessionServiceTest {
         assertThat(hermesClient.request().text())
                 .contains("xiaozhi.agent_event", "create_reminder", "delay_seconds")
                 .contains("不要使用 cron")
-                .contains("ASR: 一分钟后提醒我喝水。");
+                .contains("ASR: 明天早上提醒我喝水。");
+    }
+
+    @Test
+    void shouldScheduleStreamingRelativeReminderBeforeCallingHermes() {
+        var eventPublisher = new RecordingApplicationEventPublisher();
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("一分钟后提醒我喝水。", "streaming-provider");
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new FailingHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        serviceWithStreamingAsr.setApplicationEventPublisher(eventPublisher);
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(eventPublisher.events())
+                .singleElement()
+                .isInstanceOfSatisfying(XiaozhiReminderRequestedEvent.class, event -> {
+                    assertThat(event.deviceId()).isEqualTo("ws-session-1");
+                    assertThat(event.message()).isEqualTo("喝水");
+                    assertThat(event.delaySeconds()).isEqualTo(60L);
+                });
+        assertThat(textPayloads(session))
+                .anySatisfy(payload -> assertThat(payload)
+                        .contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "一分钟后提醒你喝水"));
     }
 
     @Test

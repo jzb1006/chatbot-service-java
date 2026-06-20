@@ -861,6 +861,11 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             )) {
                 return;
             }
+            var reminderIntent = XiaozhiReminderIntent.parse(userText);
+            if (reminderIntent != null) {
+                scheduleReminder(webSocketSession, voiceSession, asrTurn.turnGeneration(), reminderIntent, asrMillis);
+                return;
+            }
             var turnResult = streamChatAndSpeak(
                     webSocketSession,
                     voiceSession,
