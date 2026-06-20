@@ -9,8 +9,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import jakarta.annotation.PreDestroy;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
@@ -24,15 +24,30 @@ import org.springframework.stereotype.Service;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class XiaozhiReminderService {
 
+    private static final int MAX_DELIVERY_ATTEMPTS = 4;
+    private static final long RETRY_DELAY_MILLIS = 5_000L;
+
     private final XiaozhiVoiceSessionService sessionService;
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(
-            Runtime.getRuntime().availableProcessors(),
-            Thread.ofVirtual().name("xiaozhi-reminder-", 0).factory()
-    );
+    private final ScheduledExecutorService scheduler;
+    private final long retryDelayMillis;
     private final ConcurrentHashMap<String, CreatedReminder> reminders = new ConcurrentHashMap<>();
+
+    @Autowired
+    public XiaozhiReminderService(XiaozhiVoiceSessionService sessionService) {
+        this(sessionService, newScheduler(), RETRY_DELAY_MILLIS);
+    }
+
+    XiaozhiReminderService(
+            XiaozhiVoiceSessionService sessionService,
+            ScheduledExecutorService scheduler,
+            long retryDelayMillis
+    ) {
+        this.sessionService = sessionService;
+        this.scheduler = scheduler;
+        this.retryDelayMillis = retryDelayMillis;
+    }
 
     /**
      * 创建提醒任务。
@@ -53,7 +68,7 @@ public class XiaozhiReminderService {
         var reminder = new CreatedReminder(UUID.randomUUID().toString(), deviceId, message, triggerAt);
         reminders.put(reminder.id(), reminder);
         scheduler.schedule(
-                () -> fire(reminder),
+                () -> fire(reminder, 1),
                 Math.max(0L, triggerAt.toEpochMilli() - Instant.now().toEpochMilli()),
                 TimeUnit.MILLISECONDS
         );
@@ -85,16 +100,34 @@ public class XiaozhiReminderService {
         createAfter(event.deviceId(), event.message(), event.delaySeconds());
     }
 
-    private void fire(CreatedReminder reminder) {
-        reminders.remove(reminder.id());
+    private void fire(CreatedReminder reminder, int attempt) {
         var notified = sessionService.notifyDevice(reminder.deviceId(), reminder.message());
-        if (!notified) {
-            log.warn("xiaozhi reminder skipped because device is offline, reminderId={}, deviceId={}",
-                    reminder.id(), reminder.deviceId());
+        if (notified) {
+            reminders.remove(reminder.id());
+            log.info("xiaozhi reminder delivered, reminderId={}, deviceId={}, message={}, attempt={}",
+                    reminder.id(), reminder.deviceId(), reminder.message(), attempt);
             return;
         }
-        log.info("xiaozhi reminder delivered, reminderId={}, deviceId={}, message={}",
-                reminder.id(), reminder.deviceId(), reminder.message());
+        if (attempt >= MAX_DELIVERY_ATTEMPTS) {
+            reminders.remove(reminder.id());
+            log.warn("xiaozhi reminder skipped after retries, reminderId={}, deviceId={}, attempts={}",
+                    reminder.id(), reminder.deviceId(), attempt);
+            return;
+        }
+        log.info("xiaozhi reminder delivery deferred, reminderId={}, deviceId={}, attempt={}, nextDelayMillis={}",
+                reminder.id(), reminder.deviceId(), attempt, retryDelayMillis);
+        scheduler.schedule(
+                () -> fire(reminder, attempt + 1),
+                retryDelayMillis,
+                TimeUnit.MILLISECONDS
+        );
+    }
+
+    private static ScheduledExecutorService newScheduler() {
+        return Executors.newScheduledThreadPool(
+                Runtime.getRuntime().availableProcessors(),
+                Thread.ofVirtual().name("xiaozhi-reminder-", 0).factory()
+        );
     }
 
     private Instant parseRemindAt(String remindAt) {
