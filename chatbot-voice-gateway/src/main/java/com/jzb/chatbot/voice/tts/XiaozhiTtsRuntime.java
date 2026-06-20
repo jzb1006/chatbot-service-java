@@ -40,6 +40,7 @@ public class XiaozhiTtsRuntime {
     private static final long STOP_DELAY_MS = 120L;
     private static final long STOP_DELAY_POLL_MS = 10L;
     private static final Duration STREAMING_FINAL_TIMEOUT = Duration.ofSeconds(30);
+    private static final Duration STREAMING_FINAL_MAX_TIMEOUT = Duration.ofMinutes(2);
 
     private final TextToSpeechClient textToSpeechClient;
     private final StreamingTextToSpeechClient streamingTextToSpeechClient;
@@ -216,7 +217,7 @@ public class XiaozhiTtsRuntime {
                 if (failure != null) {
                     handleStreamingFailure(request, playback, sentences, failure);
                 } else if (!cancelled(request.cancellationRequested(), playback)
-                        && !streamingSession.awaitFinal(STREAMING_FINAL_TIMEOUT)
+                        && !awaitStreamingFinal(request, playback, streamingSession)
                         && !cancelled(request.cancellationRequested(), playback)) {
                     handleStreamingFinalTimeout(request, playback, sentences);
                 } else if (listener.failure() != null) {
@@ -245,6 +246,37 @@ public class XiaozhiTtsRuntime {
             }
         }
         return result;
+    }
+
+    private boolean awaitStreamingFinal(
+            XiaozhiStreamingTtsRequest request,
+            XiaozhiTtsPlayback playback,
+            StreamingTextToSpeechSession streamingSession
+    ) {
+        var deadline = System.nanoTime() + STREAMING_FINAL_MAX_TIMEOUT.toNanos();
+        var observedFrames = playback.sentFrames();
+        while (!cancelled(request.cancellationRequested(), playback)) {
+            var remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                return false;
+            }
+            if (streamingSession.awaitFinal(minDuration(STREAMING_FINAL_TIMEOUT, Duration.ofNanos(remaining)))) {
+                return true;
+            }
+            if (cancelled(request.cancellationRequested(), playback)) {
+                return false;
+            }
+            var currentFrames = playback.sentFrames();
+            if (currentFrames <= observedFrames) {
+                return false;
+            }
+            observedFrames = currentFrames;
+        }
+        return false;
+    }
+
+    private Duration minDuration(Duration first, Duration second) {
+        return first.compareTo(second) <= 0 ? first : second;
     }
 
     private void closeStreamingSession(String sessionId, StreamingTextToSpeechSession streamingSession) {

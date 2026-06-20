@@ -35,8 +35,8 @@ public class XiaozhiTtsPlayback {
     private final AtomicBoolean stopSent = new AtomicBoolean();
     private long startTimestamp;
     private long playPosition = BURST_PREBUFFER_NS;
-    private int startedSentences;
-    private int sentFrames;
+    private volatile int startedSentences;
+    private volatile int sentFrames;
 
     public XiaozhiTtsPlayback(
             WebSocketSession webSocketSession,

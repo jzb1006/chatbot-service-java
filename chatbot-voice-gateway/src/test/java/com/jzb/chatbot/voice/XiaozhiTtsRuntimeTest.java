@@ -644,6 +644,32 @@ class XiaozhiTtsRuntimeTest {
     }
 
     @Test
+    void shouldKeepWaitingForStreamingFinalWhenAudioArrivesDuringFinalWait() {
+        var runtime = newRuntimeWithStreamingTts(new DelayedFinalStreamingTextToSpeechClient());
+        var session = openSession();
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        var result = runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                voiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> {
+            sentenceSink.accept("第一句内容。");
+            sentenceSink.complete();
+        });
+
+        assertThat(result.played()).isTrue();
+        assertThat(result.ttsFrames()).isEqualTo(3);
+        assertThat(result.cancelled()).isFalse();
+        assertThat(binaryMessages(session)).hasSize(3);
+        assertThat(textPayloads(session))
+                .filteredOn(payload -> payload.contains("\"type\":\"tts\"") && payload.contains("\"state\":\"stop\""))
+                .hasSize(1);
+        assertThat(voiceSession.state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
+    @Test
     void shouldStillSendStopWhenStreamingSessionCloseFails() {
         var runtime = newRuntimeWithStreamingTts(new CloseFailingStreamingTextToSpeechClient());
         var session = openSession();
@@ -1136,6 +1162,58 @@ class XiaozhiTtsRuntimeTest {
         @Override
         public boolean awaitFinal(Duration timeout) {
             return false;
+        }
+
+        @Override
+        public void close() {
+            cancel();
+        }
+    }
+
+    private static class DelayedFinalStreamingTextToSpeechClient implements StreamingTextToSpeechClient {
+
+        @Override
+        public StreamingTextToSpeechSession open(
+                TextToSpeechOptions options,
+                StreamingTextToSpeechListener listener
+        ) {
+            listener.onReady();
+            return new DelayedFinalStreamingTextToSpeechSession(listener);
+        }
+    }
+
+    private static class DelayedFinalStreamingTextToSpeechSession implements StreamingTextToSpeechSession {
+
+        private final StreamingTextToSpeechListener listener;
+        private int finalWaits;
+
+        private DelayedFinalStreamingTextToSpeechSession(StreamingTextToSpeechListener listener) {
+            this.listener = listener;
+        }
+
+        @Override
+        public void sendText(String text) {
+            listener.onAudioFrame(ByteBuffer.wrap(new byte[] {1, 2, 3}));
+        }
+
+        @Override
+        public void complete() {
+        }
+
+        @Override
+        public void cancel() {
+        }
+
+        @Override
+        public boolean awaitFinal(Duration timeout) {
+            finalWaits++;
+            if (finalWaits == 1) {
+                listener.onAudioFrame(ByteBuffer.wrap(new byte[] {4, 5, 6}));
+                return false;
+            }
+            listener.onAudioFrame(ByteBuffer.wrap(new byte[] {7, 8, 9}));
+            listener.onCompleted();
+            return true;
         }
 
         @Override
