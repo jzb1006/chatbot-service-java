@@ -130,7 +130,7 @@ public class XiaozhiVoiceSession {
         return turnGeneration;
     }
 
-    public synchronized AsrTurn startAsrStream(int sampleRate) {
+    public synchronized AsrTurn startAsrStream(int sampleRate, String listenMode) {
         cancelPlaybackLocked();
         terminateAsrStreamLocked();
         clearBargeInTurnLocked();
@@ -141,6 +141,7 @@ public class XiaozhiVoiceSession {
                 turnGeneration,
                 deviceId(),
                 conversationId(),
+                blankToDefault(listenMode, "auto"),
                 new SpeechToTextAudioStream(),
                 new StreamingOpusToPcmDecoder(sampleRate)
         );
@@ -148,6 +149,10 @@ public class XiaozhiVoiceSession {
         audioFrames.clear();
         clearCurrentSpeakingLocked();
         return asrTurn;
+    }
+
+    public synchronized AsrTurn startAsrStream(int sampleRate) {
+        return startAsrStream(sampleRate, "auto");
     }
 
     public synchronized long markProcessing() {
@@ -609,6 +614,10 @@ public class XiaozhiVoiceSession {
         return value == null || value.isBlank() ? null : value;
     }
 
+    private String blankToDefault(String value, String defaultValue) {
+        return value == null || value.isBlank() ? defaultValue : value;
+    }
+
     private String defaultConversationId() {
         return "conv-" + deviceId();
     }
@@ -618,6 +627,7 @@ public class XiaozhiVoiceSession {
             long turnGeneration,
             String deviceId,
             String conversationId,
+            String listenMode,
             SpeechToTextAudioStream audioStream,
             StreamingOpusToPcmDecoder opusDecoder
     ) {

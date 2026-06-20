@@ -409,7 +409,7 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
-    void shouldSpeakPromptWhenStreamingAsrTextIsBlank() {
+    void shouldReturnIdleWithoutPromptWhenAutoStreamingAsrTextIsBlank() {
         var streamingSpeech = new ImmediateStreamingSpeechToTextClient(" ", "streaming-provider");
         var serviceWithStreamingAsr = newService(
                 new RecordingSpeechToTextClient(),
@@ -422,6 +422,32 @@ class XiaozhiVoiceSessionServiceTest {
 
         serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
                 "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""))
+                .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\""));
+        assertThat(session.getSentMessages())
+                .noneSatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
+    }
+
+    @Test
+    void shouldSpeakPromptWhenManualStreamingAsrTextIsBlank() {
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient(" ", "streaming-provider");
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "manual", null, null, "ws-session-1", null
         ));
 
         assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();

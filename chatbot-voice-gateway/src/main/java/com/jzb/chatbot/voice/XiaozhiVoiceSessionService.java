@@ -477,7 +477,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         stopMusic(voiceSession);
         cancelCurrentTurnPlayback(voiceSession);
         if (asrMode.streaming()) {
-            var asrTurn = voiceSession.startAsrStream(audioParams.sampleRate());
+            var asrTurn = voiceSession.startAsrStream(audioParams.sampleRate(), message.mode());
             Thread.startVirtualThread(() -> processStreamingTurn(webSocketSession, voiceSession, asrTurn));
         } else {
             voiceSession.markListening();
@@ -848,6 +848,10 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         asrTurn,
                         eventFactory.error(voiceSession.sessionId(), "asr_empty", "未识别到语音")
                 )) {
+                    return;
+                }
+                if ("auto".equals(asrTurn.listenMode())) {
+                    voiceSession.markIdleIfAsrTurn(asrTurn);
                     return;
                 }
                 sendRecoverableTurnTts(
