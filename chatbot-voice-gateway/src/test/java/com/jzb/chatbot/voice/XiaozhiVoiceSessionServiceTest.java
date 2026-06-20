@@ -343,7 +343,7 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
-    void shouldSendXiaozhiSkillInstructionsToHermesForUnparsedStreamingReminderIntent() {
+    void shouldSendStreamingReminderTextToHermesWithoutLocalInstructions() {
         var hermesClient = new CapturingHermesClient();
         var streamingSpeech = new ImmediateStreamingSpeechToTextClient("明天早上提醒我喝水。", "streaming-provider");
         var serviceWithStreamingAsr = newService(
@@ -360,19 +360,38 @@ class XiaozhiVoiceSessionServiceTest {
         ));
 
         assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
-        assertThat(hermesClient.request().text())
-                .contains("xiaozhi.agent_event", "create_reminder", "delay_seconds")
-                .contains("不要使用 cron")
-                .contains("ASR: 明天早上提醒我喝水。");
+        assertThat(hermesClient.request().text()).isEqualTo("明天早上提醒我喝水。");
     }
 
     @Test
-    void shouldScheduleStreamingRelativeReminderBeforeCallingHermes() {
-        var eventPublisher = new RecordingApplicationEventPublisher();
-        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("一分钟后提醒我喝水。", "streaming-provider");
+    void shouldSendPlainStreamingConversationToHermesWithoutXiaozhiSkillInstructions() {
+        var hermesClient = new CapturingHermesClient();
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("你是谁？", "streaming-provider");
         var serviceWithStreamingAsr = newService(
                 new RecordingSpeechToTextClient(),
-                new FailingHermesClient(),
+                hermesClient,
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(hermesClient.request().text()).isEqualTo("你是谁？");
+    }
+
+    @Test
+    void shouldSendStreamingRelativeReminderToHermes() {
+        var eventPublisher = new RecordingApplicationEventPublisher();
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("一分钟后提醒我喝水。", "streaming-provider");
+        var hermesClient = new CapturingHermesClient();
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                hermesClient,
                 new FakeTextToSpeechClient(),
                 new XiaozhiAsrMode("streaming"),
                 streamingSpeech
@@ -385,20 +404,12 @@ class XiaozhiVoiceSessionServiceTest {
         ));
 
         assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
-        assertThat(eventPublisher.events())
-                .singleElement()
-                .isInstanceOfSatisfying(XiaozhiReminderRequestedEvent.class, event -> {
-                    assertThat(event.deviceId()).isEqualTo("ws-session-1");
-                    assertThat(event.message()).isEqualTo("喝水");
-                    assertThat(event.delaySeconds()).isEqualTo(60L);
-                });
-        assertThat(textPayloads(session))
-                .anySatisfy(payload -> assertThat(payload)
-                        .contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "一分钟后提醒你喝水"));
+        assertThat(hermesClient.request().text()).isEqualTo("一分钟后提醒我喝水。");
+        assertThat(eventPublisher.events()).isEmpty();
     }
 
     @Test
-    void shouldSkipTtsWhenStreamingAsrTextIsBlank() {
+    void shouldSpeakPromptWhenStreamingAsrTextIsBlank() {
         var streamingSpeech = new ImmediateStreamingSpeechToTextClient(" ", "streaming-provider");
         var serviceWithStreamingAsr = newService(
                 new RecordingSpeechToTextClient(),
@@ -418,10 +429,10 @@ class XiaozhiVoiceSessionServiceTest {
                 .filteredOn(TextMessage.class::isInstance)
                 .extracting(message -> message.getPayload().toString())
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""))
-                .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
                         "\"text\":\"我没听清，请再说一遍\""));
         assertThat(session.getSentMessages())
-                .noneSatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
+                .anySatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
     }
 
     @Test
@@ -1559,10 +1570,10 @@ class XiaozhiVoiceSessionServiceTest {
                 .filteredOn(TextMessage.class::isInstance)
                 .extracting(message -> message.getPayload().toString())
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""))
-                .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"",
                         "\"text\":\"我没听清，请再说一遍\""));
         assertThat(session.getSentMessages())
-                .noneSatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
+                .anySatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
     }
 
     @Test
@@ -2325,11 +2336,12 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
-    void shouldScheduleRelativeReminderBeforeCallingHermes() {
+    void shouldSendRelativeReminderToHermes() {
         var eventPublisher = new RecordingApplicationEventPublisher();
+        var hermesClient = new CapturingHermesClient();
         var serviceWithReminderIntent = newService(
                 new FixedSpeechToTextClient("一分钟后提醒我喝水"),
-                new FailingHermesClient(),
+                hermesClient,
                 new FakeTextToSpeechClient()
         );
         serviceWithReminderIntent.setApplicationEventPublisher(eventPublisher);
@@ -2337,18 +2349,8 @@ class XiaozhiVoiceSessionServiceTest {
 
         runSingleTurn(serviceWithReminderIntent, session);
 
-        assertThat(eventPublisher.events())
-                .singleElement()
-                .isInstanceOfSatisfying(XiaozhiReminderRequestedEvent.class, event -> {
-                    assertThat(event.deviceId()).isEqualTo("ws-session-1");
-                    assertThat(event.message()).isEqualTo("喝水");
-                    assertThat(event.delaySeconds()).isEqualTo(60L);
-                });
-        assertThat(session.getSentMessages())
-                .filteredOn(TextMessage.class::isInstance)
-                .extracting(message -> message.getPayload().toString())
-                .anySatisfy(payload -> assertThat(payload)
-                        .contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "一分钟后提醒你喝水"));
+        assertThat(hermesClient.request().text()).isEqualTo("一分钟后提醒我喝水");
+        assertThat(eventPublisher.events()).isEmpty();
     }
 
     @Test

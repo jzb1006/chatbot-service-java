@@ -22,7 +22,6 @@ import com.jzb.chatbot.voice.protocol.XiaozhiClientHello;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
-import com.jzb.chatbot.voice.reminder.XiaozhiReminderIntent;
 import com.jzb.chatbot.voice.reminder.XiaozhiReminderRequestedEvent;
 import com.jzb.chatbot.voice.sessionend.XiaozhiSessionEndAction;
 import com.jzb.chatbot.voice.sessionend.XiaozhiSessionEndProperties;
@@ -761,12 +760,16 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         transcription.provider(),
                         audioFrameCount,
                         asrMillis);
-                trySendTurnErrorIfActive(
+                sendRecoverableTurnError(
                         webSocketSession,
                         voiceSession,
                         turnGeneration,
                         "asr_empty",
-                        "未识别到语音"
+                        "未识别到语音",
+                        "我没听清，请再说一遍",
+                        asrMillis,
+                        0,
+                        transcription.provider()
                 );
                 voiceSession.markIdleIfTurnActive(turnGeneration);
                 return;
@@ -774,11 +777,6 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             sendText(webSocketSession, eventFactory.stt(voiceSession.sessionId(), userText));
             if (turnCancelled(webSocketSession, voiceSession, turnGeneration)) {
                 cancelTurnBeforeRuntime(webSocketSession, voiceSession, "", asrMillis);
-                return;
-            }
-            var reminderIntent = XiaozhiReminderIntent.parse(userText);
-            if (reminderIntent != null) {
-                scheduleReminder(webSocketSession, voiceSession, turnGeneration, reminderIntent, asrMillis);
                 return;
             }
             var result = streamChatAndSpeak(
@@ -844,11 +842,22 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         voiceSession.deviceId(),
                         provider(result),
                         asrMillis);
-                trySendAsrTurnText(
+                if (!trySendAsrTurnText(
                         webSocketSession,
                         voiceSession,
                         asrTurn,
                         eventFactory.error(voiceSession.sessionId(), "asr_empty", "未识别到语音")
+                )) {
+                    return;
+                }
+                sendRecoverableTurnTts(
+                        webSocketSession,
+                        voiceSession,
+                        asrTurn.turnGeneration(),
+                        "我没听清，请再说一遍",
+                        asrMillis,
+                        0,
+                        provider(result)
                 );
                 voiceSession.markIdleIfAsrTurn(asrTurn);
                 return;
@@ -859,11 +868,6 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                     asrTurn,
                     () -> eventFactory.stt(voiceSession.sessionId(), userText)
             )) {
-                return;
-            }
-            var reminderIntent = XiaozhiReminderIntent.parse(userText);
-            if (reminderIntent != null) {
-                scheduleReminder(webSocketSession, voiceSession, asrTurn.turnGeneration(), reminderIntent, asrMillis);
                 return;
             }
             var turnResult = streamChatAndSpeak(
@@ -919,41 +923,6 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         } finally {
             voiceSession.clearAsrStream(asrTurn);
         }
-    }
-
-    private void scheduleReminder(
-            WebSocketSession webSocketSession,
-            XiaozhiVoiceSession voiceSession,
-            long turnGeneration,
-            XiaozhiReminderIntent reminderIntent,
-            long asrMillis
-    ) {
-        if (turnCancelled(webSocketSession, voiceSession, turnGeneration)) {
-            cancelTurnBeforeRuntime(webSocketSession, voiceSession, "", asrMillis);
-            return;
-        }
-        publishReminderRequest(voiceSession, reminderIntent);
-        var ttsOperationStartedAt = System.nanoTime();
-        var playbackResult = speakWithRuntime(
-                webSocketSession,
-                voiceSession,
-                turnGeneration,
-                TurnGuard.none(),
-                List.of(reminderIntent.confirmationText()),
-                ttsOperationStartedAt,
-                "语音合成失败"
-        );
-        logTurnCompleted(
-                webSocketSession,
-                voiceSession,
-                playbackResult,
-                SENTENCE_ASR_PROVIDER,
-                asrMillis,
-                0,
-                playbackResult.ttsMillis()
-        );
-        log.info("xiaozhi reminder scheduled, sessionId={}, deviceId={}, delaySeconds={}, message={}",
-                webSocketSession.getId(), voiceSession.deviceId(), reminderIntent.delaySeconds(), reminderIntent.message());
     }
 
     private Transcription transcribe(
@@ -1013,7 +982,6 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         var segmenter = new XiaozhiSentenceSegmenter();
         var reply = new StringBuilder();
         var sentences = new ArrayList<String>();
-        var hermesInput = xiaozhiSkillInput(userText);
         var hermesStartedAt = System.nanoTime();
         try {
             if (ttsRuntime.streamingEnabled()) {
@@ -1024,7 +992,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         deviceId,
                         conversationId,
                         turnGeneration,
-                        hermesInput,
+                        userText,
                         asrMillis,
                         asrProvider,
                         extractor,
@@ -1039,7 +1007,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             try (var chunks = hermesClient.streamChat(new HermesRequest(
                     new DeviceId(deviceId),
                     new ConversationId(conversationId),
-                    hermesInput
+                    userText
             ), hermesClientConfig)) {
                 for (var chunk : (Iterable<String>) chunks::iterator) {
                     if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
@@ -1157,23 +1125,6 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             voiceSession.markIdleIfTurnActive(turnGeneration);
             return TurnResult.failure();
         }
-    }
-
-    private String xiaozhiSkillInput(String userText) {
-        return """
-                你是小智设备的 Hermes agent。请根据 ASR 文本决定输出普通回复或小智结构化事件。
-                如果 ASR 是提醒、闹钟、定时任务、稍后通知、稍后叫我、稍后推送给我这类请求，只输出下面的 SSE 事件，不要输出自然语言正文，不要使用 cron、系统定时任务或 Codex 自动化：
-                event: xiaozhi.agent_event
-                data: {"action":"create_reminder","message":"<提醒内容>","delay_seconds":<延迟秒数>,"confirmation_text":"<简短确认文本>"}
-
-                字段要求：
-                - delay_seconds 使用相对时间换算后的秒数。
-                - message 只保留到点需要播报的内容，不要包含时间前缀。
-                - confirmation_text 要短，适合 TTS 播报，例如“1 分钟后提醒你喝水”。
-                - 非提醒请求按正常对话回复。
-
-                ASR: %s
-                """.formatted(userText);
     }
 
     private TurnResult streamChatAndSpeakWithStreamingTts(
@@ -1479,13 +1430,9 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         if (!"create_reminder".equals(event.action())) {
             return null;
         }
-        var reminderIntent = new XiaozhiReminderIntent(
-                event.message(),
-                event.delaySeconds(),
-                event.confirmationText() == null ? "" : event.confirmationText()
-        );
-        publishReminderRequest(voiceSession, reminderIntent);
-        return turnGuard.active() ? reminderIntent.confirmationText() : null;
+        publishReminderRequest(voiceSession, event.message(), event.delaySeconds());
+        var confirmationText = event.confirmationText() == null ? "" : event.confirmationText();
+        return turnGuard.active() ? confirmationText : null;
     }
 
     private boolean handleSessionEndAction(
@@ -1543,14 +1490,11 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         return event != null && event.action() != null && event.action().startsWith("music_");
     }
 
-    private void publishReminderRequest(
-            XiaozhiVoiceSession voiceSession,
-            XiaozhiReminderIntent reminderIntent
-    ) {
+    private void publishReminderRequest(XiaozhiVoiceSession voiceSession, String message, long delaySeconds) {
         eventPublisher.publishEvent(new XiaozhiReminderRequestedEvent(
                 voiceSession.deviceId(),
-                reminderIntent.message(),
-                reminderIntent.delaySeconds()
+                message,
+                delaySeconds
         ));
     }
 
