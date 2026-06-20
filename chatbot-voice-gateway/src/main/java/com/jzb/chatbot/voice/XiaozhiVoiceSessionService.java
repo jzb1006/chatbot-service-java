@@ -1008,6 +1008,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         var segmenter = new XiaozhiSentenceSegmenter();
         var reply = new StringBuilder();
         var sentences = new ArrayList<String>();
+        var hermesInput = xiaozhiSkillInput(userText);
         var hermesStartedAt = System.nanoTime();
         try {
             if (ttsRuntime.streamingEnabled()) {
@@ -1018,7 +1019,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         deviceId,
                         conversationId,
                         turnGeneration,
-                        userText,
+                        hermesInput,
                         asrMillis,
                         asrProvider,
                         extractor,
@@ -1033,7 +1034,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             try (var chunks = hermesClient.streamChat(new HermesRequest(
                     new DeviceId(deviceId),
                     new ConversationId(conversationId),
-                    userText
+                    hermesInput
             ), hermesClientConfig)) {
                 for (var chunk : (Iterable<String>) chunks::iterator) {
                     if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
@@ -1151,6 +1152,23 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             voiceSession.markIdleIfTurnActive(turnGeneration);
             return TurnResult.failure();
         }
+    }
+
+    private String xiaozhiSkillInput(String userText) {
+        return """
+                你是小智设备的 Hermes agent。请根据 ASR 文本决定输出普通回复或小智结构化事件。
+                如果 ASR 是提醒、闹钟、定时任务、稍后通知、稍后叫我、稍后推送给我这类请求，只输出下面的 SSE 事件，不要输出自然语言正文，不要使用 cron、系统定时任务或 Codex 自动化：
+                event: xiaozhi.agent_event
+                data: {"action":"create_reminder","message":"<提醒内容>","delay_seconds":<延迟秒数>,"confirmation_text":"<简短确认文本>"}
+
+                字段要求：
+                - delay_seconds 使用相对时间换算后的秒数。
+                - message 只保留到点需要播报的内容，不要包含时间前缀。
+                - confirmation_text 要短，适合 TTS 播报，例如“1 分钟后提醒你喝水”。
+                - 非提醒请求按正常对话回复。
+
+                ASR: %s
+                """.formatted(userText);
     }
 
     private TurnResult streamChatAndSpeakWithStreamingTts(

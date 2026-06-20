@@ -343,6 +343,30 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldSendXiaozhiSkillInstructionsToHermesForStreamingReminderIntent() {
+        var hermesClient = new CapturingHermesClient();
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("一分钟后提醒我喝水。", "streaming-provider");
+        var serviceWithStreamingAsr = newService(
+                new RecordingSpeechToTextClient(),
+                hermesClient,
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(hermesClient.request().text())
+                .contains("xiaozhi.agent_event", "create_reminder", "delay_seconds")
+                .contains("不要使用 cron")
+                .contains("ASR: 一分钟后提醒我喝水。");
+    }
+
+    @Test
     void shouldSkipTtsWhenStreamingAsrTextIsBlank() {
         var streamingSpeech = new ImmediateStreamingSpeechToTextClient(" ", "streaming-provider");
         var serviceWithStreamingAsr = newService(

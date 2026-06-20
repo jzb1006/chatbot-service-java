@@ -385,12 +385,24 @@ public class XiaozhiTtsRuntime {
         if (naturalPlaybackFinished) {
             sleepStopDelay(cancellationRequested, playback);
         }
+        if (!webSocketSession.isOpen()) {
+            return;
+        }
         try {
             sendText(webSocketSession, eventFactory.ttsStop(voiceSession.sessionId()));
         } catch (IOException exception) {
             log.warn("Failed to send xiaozhi tts stop for session {}: {}",
                     voiceSession.sessionId(), exception.getMessage(), exception);
+        } catch (IllegalStateException exception) {
+            if (!closedWebSocketMessage(exception)) {
+                throw exception;
+            }
         }
+    }
+
+    private boolean closedWebSocketMessage(IllegalStateException exception) {
+        var message = exception.getMessage();
+        return message != null && message.contains("WebSocket session has been closed");
     }
 
     private void sleepStopDelay(BooleanSupplier cancellationRequested, XiaozhiTtsPlayback playback) {

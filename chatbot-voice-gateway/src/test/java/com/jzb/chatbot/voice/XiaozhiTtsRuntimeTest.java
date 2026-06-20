@@ -383,6 +383,21 @@ class XiaozhiTtsRuntimeTest {
     }
 
     @Test
+    void shouldIgnoreClosedWebSocketRuntimeFailureWhenSendingStop() {
+        var runtime = newRuntimeWithFakeTts();
+        var session = new ClosedStopFailingSession("ws-session-1");
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        assertThat(runtime.speak(new XiaozhiTtsRequest(
+                session, voiceSession, List.of("回头再聊"), TextToSpeechOptions.defaults()
+        ))).isTrue();
+
+        assertThat(session.isOpen()).isFalse();
+        assertThat(voiceSession.state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+        assertThat(voiceSession.cancelPlayback()).isNull();
+    }
+
+    @Test
     void shouldSkipNullAndBlankSentences() {
         var ttsClient = new RecordingTextToSpeechClient();
         var runtime = newRuntime(ttsClient);
@@ -484,6 +499,32 @@ class XiaozhiTtsRuntimeTest {
         assertThat(textPayloads(session))
                 .filteredOn(payload -> payload.contains("\"type\":\"tts\"") && payload.contains("\"state\":\"stop\""))
                 .hasSize(1);
+    }
+
+    @Test
+    void shouldSkipStreamingStopWhenWebSocketAlreadyClosed() {
+        var runtime = newRuntimeWithStreamingTts(new PushStreamingTextToSpeechClient());
+        TimingWebSocketSession session = new ClosingOnBinaryWebSocketSession("ws-session-1");
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        var result = runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                voiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> {
+            sentenceSink.accept("回头再聊");
+            sentenceSink.complete();
+        });
+
+        assertThat(session.isOpen()).isFalse();
+        assertThat(result.played()).isTrue();
+        assertThat(session.stopSentAt()).isZero();
+        assertThat(textPayloads(session))
+                .filteredOn(payload -> payload.contains("\"type\":\"tts\"") && payload.contains("\"state\":\"stop\""))
+                .isEmpty();
+        assertThat(voiceSession.state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+        assertThat(voiceSession.cancelPlayback()).isNull();
     }
 
     @Test
@@ -824,6 +865,22 @@ class XiaozhiTtsRuntimeTest {
         public void sendMessage(WebSocketMessage<?> message) throws IOException {
             if (message instanceof TextMessage textMessage && textMessage.getPayload().contains("\"state\":\"stop\"")) {
                 throw new IOException("stop failed");
+            }
+            super.sendMessage(message);
+        }
+    }
+
+    private static class ClosedStopFailingSession extends TestWebSocketSession {
+
+        private ClosedStopFailingSession(String id) {
+            super(id);
+        }
+
+        @Override
+        public void sendMessage(WebSocketMessage<?> message) throws IOException {
+            if (message instanceof TextMessage textMessage && textMessage.getPayload().contains("\"state\":\"stop\"")) {
+                close();
+                throw new IllegalStateException("Message will not be sent because the WebSocket session has been closed");
             }
             super.sendMessage(message);
         }
@@ -1187,6 +1244,21 @@ class XiaozhiTtsRuntimeTest {
 
         private boolean isTtsStop(String payload) {
             return payload.contains("\"type\":\"tts\"") && payload.contains("\"state\":\"stop\"");
+        }
+    }
+
+    private static class ClosingOnBinaryWebSocketSession extends TimingWebSocketSession {
+
+        private ClosingOnBinaryWebSocketSession(String id) {
+            super(id);
+        }
+
+        @Override
+        public synchronized void sendMessage(WebSocketMessage<?> message) throws IOException {
+            super.sendMessage(message);
+            if (message instanceof BinaryMessage) {
+                close();
+            }
         }
     }
 }

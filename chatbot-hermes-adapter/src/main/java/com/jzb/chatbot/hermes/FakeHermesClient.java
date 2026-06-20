@@ -16,17 +16,28 @@ public class FakeHermesClient implements HermesClient {
 
     @Override
     public HermesResponse chat(HermesRequest request, HermesClientConfig config) {
-        var text = "ping".equals(request.text()) ? "pong" : request.text();
+        var userText = userText(request.text());
+        var text = "ping".equals(userText) ? "pong" : userText;
         return new HermesResponse(request.conversationId(), text);
     }
 
     @Override
     public Stream<String> streamChat(HermesRequest request, HermesClientConfig config) {
-        var text = "ping".equals(request.text()) ? "pong" : request.text();
+        var userText = userText(request.text());
+        var text = "ping".equals(userText) ? "pong" : userText;
         return Stream.of(
                 "event: message\ndata: {\"answer\":\"" + escapeJson(text) + "\"}\n\n",
                 "event: done\ndata: {}\n\n"
         );
+    }
+
+    private String userText(String value) {
+        var marker = "\nASR: ";
+        var index = value.lastIndexOf(marker);
+        if (index < 0) {
+            return value;
+        }
+        return value.substring(index + marker.length()).strip();
     }
 
     private String escapeJson(String value) {

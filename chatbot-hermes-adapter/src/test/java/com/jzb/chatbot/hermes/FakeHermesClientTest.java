@@ -47,4 +47,24 @@ class FakeHermesClientTest {
 
                 """);
     }
+
+    @Test
+    void shouldUseAsrTextWhenRequestContainsXiaozhiSkillInstructions() {
+        var client = new FakeHermesClient();
+
+        var events = client.streamChat(
+                new HermesRequest(
+                        new DeviceId("device-1"),
+                        new ConversationId("conv-1"),
+                        """
+                                你是小智设备的 Hermes agent。
+
+                                ASR: ping
+                                """
+                ),
+                new HermesClientConfig("http://127.0.0.1:8642/v1", "hermes-agent", "key", Duration.ofSeconds(1), "owner")
+        ).toList();
+
+        assertThat(String.join("", events)).contains("{\"answer\":\"pong\"}");
+    }
 }
