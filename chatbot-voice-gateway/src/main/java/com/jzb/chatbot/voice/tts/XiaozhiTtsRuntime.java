@@ -218,7 +218,7 @@ public class XiaozhiTtsRuntime {
                 } else if (!cancelled(request.cancellationRequested(), playback)
                         && !streamingSession.awaitFinal(STREAMING_FINAL_TIMEOUT)
                         && !cancelled(request.cancellationRequested(), playback)) {
-                    throw new IllegalStateException("streaming tts final timeout");
+                    handleStreamingFinalTimeout(request, playback, sentences);
                 } else if (listener.failure() != null) {
                     handleStreamingFailure(request, playback, sentences, listener.failure());
                 }
@@ -478,6 +478,27 @@ public class XiaozhiTtsRuntime {
                 }
             }
         }
+    }
+
+    private void handleStreamingFinalTimeout(
+            XiaozhiStreamingTtsRequest request,
+            XiaozhiTtsPlayback playback,
+            ArrayList<String> sentences
+    ) throws IOException {
+        if (playback.sentFrames() > 0) {
+            log.warn("xiaozhi streaming tts final timeout after audio, sessionId={}, deviceId={}, sentences={}, frames={}",
+                    request.voiceSession().sessionId(),
+                    request.voiceSession().deviceId(),
+                    sentences.size(),
+                    playback.sentFrames());
+            return;
+        }
+        handleStreamingFailure(
+                request,
+                playback,
+                sentences,
+                new IllegalStateException("streaming tts final timeout")
+        );
     }
 
     private boolean cancelled(BooleanSupplier cancellationRequested, XiaozhiTtsPlayback playback) {
