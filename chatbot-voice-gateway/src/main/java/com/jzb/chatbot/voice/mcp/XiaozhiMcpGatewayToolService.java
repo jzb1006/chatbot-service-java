@@ -52,7 +52,7 @@ public class XiaozhiMcpGatewayToolService {
         reminderProperties.set("delaySeconds", schema("integer", "从当前时间开始延迟的秒数，例如一分钟后传 60"));
         tools.add(tool(
                 "xiaozhi_list_online_devices",
-                "列出当前在线的小智设备 ID。返回 devices 数组。",
+                "列出当前在线的小智设备 ID。返回 devices 数组和 deviceSessions 明细，deviceSessions[].mcpReady 表示设备 hello 是否声明 MCP 能力。",
                 objectMapper.createObjectNode()
         ));
         tools.add(tool(
@@ -135,8 +135,15 @@ public class XiaozhiMcpGatewayToolService {
     private ObjectNode listOnlineDevices() {
         var result = objectMapper.createObjectNode();
         var devices = objectMapper.createArrayNode();
-        bridge.onlineDeviceIds().forEach(devices::add);
+        var deviceSessions = objectMapper.createArrayNode();
+        bridge.onlineDevices().forEach(deviceSession -> {
+            devices.add(deviceSession.deviceId());
+            deviceSessions.add(objectMapper.createObjectNode()
+                    .put("deviceId", deviceSession.deviceId())
+                    .put("mcpReady", deviceSession.mcpReady()));
+        });
         result.set("devices", devices);
+        result.set("deviceSessions", deviceSessions);
         return result;
     }
 

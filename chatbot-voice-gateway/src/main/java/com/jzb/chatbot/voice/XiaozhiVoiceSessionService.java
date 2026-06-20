@@ -392,6 +392,9 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         var version = hello.version() <= 0 ? 1 : hello.version();
         var voiceSession = getSession(webSocketSession.getId());
         voiceSession.updateProtocolVersion(version);
+        if (hello.features() != null && Boolean.TRUE.equals(hello.features().get("mcp"))) {
+            mcpBridge.markMcpReady(voiceSession.deviceId(), webSocketSession.getId());
+        }
         log.info("xiaozhi hello received, sessionId={}, deviceId={}, clientId={}, protocolVersion={}, audioParams={}",
                 webSocketSession.getId(),
                 voiceSession.deviceId(),

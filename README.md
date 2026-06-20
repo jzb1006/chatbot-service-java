@@ -129,6 +129,22 @@ curl -H "X-MCP-Admin-Token: <admin-token>" \
   http://203.195.202.54:8766/api/xiaozhi/devices
 ```
 
+响应同时保留旧的 `devices` 数组，并提供 `deviceSessions` 作为 MCP readiness 明细：
+
+```json
+{
+  "devices": ["device-1"],
+  "deviceSessions": [
+    {
+      "deviceId": "device-1",
+      "mcpReady": true
+    }
+  ]
+}
+```
+
+`mcpReady=true` 表示该 WebSocket 会话的 hello 已声明 `features.mcp=true`。设备在线但 `mcpReady=false` 时，服务端不会继续等待设备 MCP response。
+
 下发 `tools/list`：
 
 ```bash

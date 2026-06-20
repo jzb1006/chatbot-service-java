@@ -42,7 +42,11 @@ public class XiaozhiMcpController {
         if (!adminAuth.matches(token)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "mcp admin token required"));
         }
-        return ResponseEntity.ok(Map.of("devices", bridge.onlineDeviceIds()));
+        var deviceSessions = bridge.onlineDevices();
+        return ResponseEntity.ok(Map.of(
+                "devices", deviceSessions.stream().map(XiaozhiMcpBridge.DeviceMcpSession::deviceId).toList(),
+                "deviceSessions", deviceSessions
+        ));
     }
 
     /**

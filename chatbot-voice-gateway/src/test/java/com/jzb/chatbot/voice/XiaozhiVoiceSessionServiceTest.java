@@ -1622,6 +1622,13 @@ class XiaozhiVoiceSessionServiceTest {
         headers.set("Device-Id", "device-1");
         var session = new TestWebSocketSession("ws-session-1", URI.create("ws://127.0.0.1/xiaozhi/v1"), headers);
         serviceWithBridge.open(session);
+        serviceWithBridge.handleHello(session, new XiaozhiClientHello(
+                "hello",
+                1,
+                Map.of("mcp", true),
+                "websocket",
+                XiaozhiAudioParams.defaults()
+        ));
         var future = mcpBridge.call("device-1", new ObjectMapper().readTree("""
                 {"jsonrpc":"2.0","id":9,"method":"tools/list"}
                 """), Duration.ofSeconds(1));
@@ -1634,6 +1641,38 @@ class XiaozhiVoiceSessionServiceTest {
 
         assertThat(future).succeedsWithin(Duration.ofMillis(100))
                 .satisfies(json -> assertThat(json.path("result").path("tools").isArray()).isTrue());
+    }
+
+    @Test
+    void shouldMarkMcpReadyWhenHelloDeclaresMcpFeature() throws Exception {
+        var mcpBridge = newMcpBridge();
+        var serviceWithBridge = newService(
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                mcpBridge
+        );
+        var headers = new HttpHeaders();
+        headers.set("Device-Id", "device-1");
+        var session = new TestWebSocketSession("ws-session-1", URI.create("ws://127.0.0.1/xiaozhi/v1"), headers);
+        serviceWithBridge.open(session);
+        serviceWithBridge.handleHello(session, new XiaozhiClientHello(
+                "hello",
+                1,
+                Map.of("mcp", true),
+                "websocket",
+                XiaozhiAudioParams.defaults()
+        ));
+
+        var future = mcpBridge.call("device-1", new ObjectMapper().readTree("""
+                {"jsonrpc":"2.0","id":10,"method":"tools/list"}
+                """), Duration.ofSeconds(1));
+
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"mcp\"", "\"id\":10"));
+        future.cancel(true);
     }
 
     @Test

@@ -32,6 +32,40 @@ class XiaozhiMcpBridgeTest {
     }
 
     @Test
+    void shouldExposeMcpReadinessOnlyAfterDeviceHelloDeclaresMcp() {
+        var session = new TestWebSocketSession("ws-session-1");
+        bridge.register("device-1", "ws-session-1", session);
+
+        assertThat(bridge.onlineDevices())
+                .singleElement()
+                .satisfies(device -> {
+                    assertThat(device.deviceId()).isEqualTo("device-1");
+                    assertThat(device.mcpReady()).isFalse();
+                });
+
+        bridge.markMcpReady("device-1", "ws-session-1");
+
+        assertThat(bridge.onlineDevices())
+                .singleElement()
+                .satisfies(device -> assertThat(device.mcpReady()).isTrue());
+    }
+
+    @Test
+    void shouldRejectMcpCallBeforeDeviceDeclaresMcpReady() throws Exception {
+        var session = new TestWebSocketSession("ws-session-1");
+        bridge.register("device-1", "ws-session-1", session);
+
+        var future = bridge.call("device-1", objectMapper.readTree("""
+                {"jsonrpc":"2.0","id":10,"method":"tools/list"}
+                """), Duration.ofSeconds(1));
+
+        assertThat(future).failsWithin(Duration.ofMillis(100))
+                .withThrowableThat()
+                .withMessageContaining("device mcp is not ready");
+        assertThat(session.getSentMessages()).isEmpty();
+    }
+
+    @Test
     void shouldReturnFalseWhenDeviceIsOffline() throws Exception {
         var sent = bridge.send("offline-device", objectMapper.readTree("""
                 {"jsonrpc":"2.0","id":1,"method":"tools/list"}
@@ -44,6 +78,7 @@ class XiaozhiMcpBridgeTest {
     void shouldCompletePendingRequestWhenDeviceRespondsWithSameId() throws Exception {
         var session = new TestWebSocketSession("ws-session-1");
         bridge.register("device-1", "ws-session-1", session);
+        bridge.markMcpReady("device-1", "ws-session-1");
         var future = bridge.call("device-1", objectMapper.readTree("""
                 {"jsonrpc":"2.0","id":7,"method":"tools/list"}
                 """), Duration.ofSeconds(1));
@@ -60,6 +95,7 @@ class XiaozhiMcpBridgeTest {
     void shouldRejectNonNumericRequestIdBeforeSendingToDevice() throws Exception {
         var session = new TestWebSocketSession("ws-session-1");
         bridge.register("device-1", "ws-session-1", session);
+        bridge.markMcpReady("device-1", "ws-session-1");
 
         assertThatThrownBy(() -> bridge.call("device-1", objectMapper.readTree("""
                 {"jsonrpc":"2.0","id":"abc","method":"tools/list"}
@@ -73,6 +109,7 @@ class XiaozhiMcpBridgeTest {
     void shouldCancelPendingRequestsWhenDeviceDisconnects() throws Exception {
         var session = new TestWebSocketSession("ws-session-1");
         bridge.register("device-1", "ws-session-1", session);
+        bridge.markMcpReady("device-1", "ws-session-1");
         var future = bridge.call("device-1", objectMapper.readTree("""
                 {"jsonrpc":"2.0","id":8,"method":"tools/list"}
                 """), Duration.ofSeconds(1));
@@ -90,6 +127,7 @@ class XiaozhiMcpBridgeTest {
         var currentSession = new TestWebSocketSession("ws-session-2");
         bridge.register("device-1", "ws-session-1", staleSession);
         bridge.register("device-1", "ws-session-2", currentSession);
+        bridge.markMcpReady("device-1", "ws-session-2");
         var future = bridge.call("device-1", objectMapper.readTree("""
                 {"jsonrpc":"2.0","id":9,"method":"tools/list"}
                 """), Duration.ofSeconds(1));

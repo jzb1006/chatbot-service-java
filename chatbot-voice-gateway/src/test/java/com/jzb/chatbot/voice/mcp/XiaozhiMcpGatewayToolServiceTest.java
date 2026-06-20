@@ -39,6 +39,8 @@ class XiaozhiMcpGatewayToolServiceTest {
                         "xiaozhi_call_device_tool",
                         "xiaozhi_create_reminder"
                 );
+        assertThat(tools.get(0).path("description").asText())
+                .contains("deviceSessions", "mcpReady");
         assertThat(tools.get(2).path("inputSchema").path("properties").has("deviceId")).isTrue();
         assertThat(tools.get(2).path("inputSchema").path("properties").has("name")).isTrue();
         assertThat(tools.get(2).path("inputSchema").path("properties").has("arguments")).isTrue();
@@ -53,11 +55,18 @@ class XiaozhiMcpGatewayToolServiceTest {
 
     @Test
     void shouldListOnlineDevices() {
-        given(bridge.onlineDeviceIds()).willReturn(List.of("device-1", "device-2"));
+        given(bridge.onlineDevices()).willReturn(List.of(
+                new XiaozhiMcpBridge.DeviceMcpSession("device-1", true),
+                new XiaozhiMcpBridge.DeviceMcpSession("device-2", false)
+        ));
 
         var result = service.call("xiaozhi_list_online_devices", objectMapper.createObjectNode(), Duration.ofSeconds(1));
 
         assertThat(result.path("devices")).extracting(JsonNode::asText).containsExactly("device-1", "device-2");
+        assertThat(result.path("deviceSessions").get(0).path("deviceId").asText()).isEqualTo("device-1");
+        assertThat(result.path("deviceSessions").get(0).path("mcpReady").asBoolean()).isTrue();
+        assertThat(result.path("deviceSessions").get(1).path("deviceId").asText()).isEqualTo("device-2");
+        assertThat(result.path("deviceSessions").get(1).path("mcpReady").asBoolean()).isFalse();
     }
 
     @Test

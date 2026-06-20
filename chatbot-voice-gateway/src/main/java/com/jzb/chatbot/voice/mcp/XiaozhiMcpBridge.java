@@ -42,7 +42,19 @@ public class XiaozhiMcpBridge {
      * @param session WebSocket 会话
      */
     public void register(String deviceId, String sessionId, WebSocketSession session) {
-        sessions.put(deviceId, new DeviceSession(deviceId, sessionId, session));
+        sessions.put(deviceId, new DeviceSession(deviceId, sessionId, session, false));
+    }
+
+    /**
+     * 标记设备当前会话已声明 MCP 能力。
+     *
+     * @param deviceId 设备 ID
+     * @param sessionId WebSocket 会话 ID
+     */
+    public void markMcpReady(String deviceId, String sessionId) {
+        sessions.computeIfPresent(deviceId, (key, current) -> current.sessionId().equals(sessionId)
+                ? new DeviceSession(current.deviceId(), current.sessionId(), current.session(), true)
+                : current);
     }
 
     /**
@@ -92,6 +104,17 @@ public class XiaozhiMcpBridge {
     public CompletableFuture<JsonNode> call(String deviceId, JsonNode payload, Duration timeout) {
         if (!payload.path("id").isNumber()) {
             throw new IllegalArgumentException("mcp request id must be numeric");
+        }
+        var deviceSession = sessions.get(deviceId);
+        if (deviceSession == null || !deviceSession.session().isOpen()) {
+            var future = new CompletableFuture<JsonNode>();
+            future.completeExceptionally(new IllegalStateException("device is offline"));
+            return future;
+        }
+        if (!deviceSession.mcpReady()) {
+            var future = new CompletableFuture<JsonNode>();
+            future.completeExceptionally(new IllegalStateException("device mcp is not ready"));
+            return future;
         }
         var requestId = payload.path("id").asText("");
         var future = new CompletableFuture<JsonNode>();
@@ -143,6 +166,19 @@ public class XiaozhiMcpBridge {
                 .toList();
     }
 
+    /**
+     * 列出在线设备 MCP 会话状态。
+     *
+     * @return 在线设备 MCP 会话状态列表
+     */
+    public List<DeviceMcpSession> onlineDevices() {
+        return sessions.values().stream()
+                .filter(deviceSession -> deviceSession.session().isOpen())
+                .map(deviceSession -> new DeviceMcpSession(deviceSession.deviceId(), deviceSession.mcpReady()))
+                .sorted((left, right) -> left.deviceId().compareTo(right.deviceId()))
+                .toList();
+    }
+
     private String pendingKey(String deviceId, String requestId) {
         return deviceId + ":" + requestId;
     }
@@ -169,6 +205,15 @@ public class XiaozhiMcpBridge {
         });
     }
 
-    private record DeviceSession(String deviceId, String sessionId, WebSocketSession session) {
+    /**
+     * 在线设备 MCP 会话状态。
+     *
+     * @param deviceId 设备 ID
+     * @param mcpReady true 表示当前 WebSocket hello 已声明 MCP 能力
+     */
+    public record DeviceMcpSession(String deviceId, boolean mcpReady) {
+    }
+
+    private record DeviceSession(String deviceId, String sessionId, WebSocketSession session, boolean mcpReady) {
     }
 }
