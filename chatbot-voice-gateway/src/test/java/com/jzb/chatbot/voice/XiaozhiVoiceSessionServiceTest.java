@@ -1431,11 +1431,12 @@ class XiaozhiVoiceSessionServiceTest {
         ));
 
         assertThat(hermesClient.request().deviceId().value()).isEqualTo("aa:bb:cc:dd:ee:ff");
-        assertThat(hermesClient.request().conversationId().value()).isEqualTo("conv-aa:bb:cc:dd:ee:ff");
+        assertThat(hermesClient.request().conversationId().value())
+                .startsWith("conv-aa:bb:cc:dd:ee:ff-ws-session-1-");
     }
 
     @Test
-    void shouldKeepSameConversationUntilSessionNewRequested() {
+    void shouldKeepHelloConversationUntilSessionNewRequested() {
         var hermesClient = new RecordingHermesClient();
         var serviceWithRecordingHermes = newService(new FakeSpeechToTextClient(), hermesClient, new FakeTextToSpeechClient());
         var session = openSession(serviceWithRecordingHermes);
@@ -1450,6 +1451,7 @@ class XiaozhiVoiceSessionServiceTest {
         assertThat(hermesClient.conversationIds()).hasSize(3);
         assertThat(hermesClient.conversationIds().get(0)).isEqualTo(hermesClient.conversationIds().get(1));
         assertThat(hermesClient.conversationIds().get(2)).isNotEqualTo(hermesClient.conversationIds().get(0));
+        assertThat(hermesClient.conversationIds().get(0)).startsWith("conv-ws-session-1-ws-session-1-");
         assertThat(hermesClient.conversationIds().get(2)).startsWith("conv-ws-session-1-ws-session-1-");
         assertThat(session.getSentMessages())
                 .filteredOn(TextMessage.class::isInstance)

@@ -395,12 +395,15 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         if (hello.features() != null && Boolean.TRUE.equals(hello.features().get("mcp"))) {
             mcpBridge.markMcpReady(voiceSession.deviceId(), webSocketSession.getId());
         }
+        var conversationId = voiceSession.startNewConversation();
         log.info("xiaozhi hello received, sessionId={}, deviceId={}, clientId={}, protocolVersion={}, audioParams={}",
                 webSocketSession.getId(),
                 voiceSession.deviceId(),
                 voiceSession.clientId(),
                 version,
                 hello.audioParams());
+        log.info("xiaozhi conversation started, sessionId={}, deviceId={}, conversationId={}, source=hello",
+                webSocketSession.getId(), voiceSession.deviceId(), conversationId);
     }
 
     /**
