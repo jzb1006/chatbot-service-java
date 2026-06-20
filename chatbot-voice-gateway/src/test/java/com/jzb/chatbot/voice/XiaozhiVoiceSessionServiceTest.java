@@ -31,6 +31,7 @@ import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
 import com.jzb.chatbot.voice.music.XiaozhiMusicActionHandler;
 import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRequest;
 import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRuntime;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackState;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientHello;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
@@ -785,6 +786,29 @@ class XiaozhiVoiceSessionServiceTest {
         ));
 
         assertThat(musicRuntime.events()).contains("stop:ws-session-1");
+    }
+
+    @Test
+    void shouldIgnoreAutoListenWhenMusicIsPlaying() {
+        var streamingSpeech = new RecordingStreamingSpeechToTextClient("ping", "streaming-provider");
+        var musicRuntime = new CapturingMusicPlaybackRuntime();
+        musicRuntime.markPlaying("晴天");
+        var serviceWithMusic = newServiceWithBargeInControlIntent(
+                new FakeHermesClient(),
+                streamingSpeech,
+                new FakeTextToSpeechClient(),
+                musicRuntime,
+                false
+        );
+        var session = openSession(serviceWithMusic);
+
+        serviceWithMusic.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(musicRuntime.events()).doesNotContain("stop:ws-session-1");
+        assertThat(streamingSpeech.started()).isFalse();
+        assertThat(serviceWithMusic.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
     }
 
     @Test
@@ -3352,6 +3376,8 @@ class XiaozhiVoiceSessionServiceTest {
         @Override
         public void stop(String deviceId) {
             events.add("stop:" + deviceId);
+            playedTitles.clear();
+            playedPausedForTtsTitles.clear();
         }
 
         private List<String> playedTitles() {
@@ -3364,6 +3390,33 @@ class XiaozhiVoiceSessionServiceTest {
 
         private List<String> events() {
             return List.copyOf(events);
+        }
+
+        @Override
+        public XiaozhiMusicPlaybackState state(String deviceId) {
+            if (!playedTitles.isEmpty()) {
+                return new XiaozhiMusicPlaybackState(
+                        deviceId,
+                        playedTitles.get(playedTitles.size() - 1),
+                        "歌手",
+                        XiaozhiMusicPlaybackState.Status.PLAYING,
+                        null
+                );
+            }
+            if (!playedPausedForTtsTitles.isEmpty()) {
+                return new XiaozhiMusicPlaybackState(
+                        deviceId,
+                        playedPausedForTtsTitles.get(playedPausedForTtsTitles.size() - 1),
+                        "歌手",
+                        XiaozhiMusicPlaybackState.Status.PAUSED,
+                        XiaozhiMusicPlaybackState.PauseSource.TTS
+                );
+            }
+            return super.state(deviceId);
+        }
+
+        private void markPlaying(String title) {
+            playedTitles.add(title);
         }
     }
 
@@ -3681,6 +3734,10 @@ class XiaozhiVoiceSessionServiceTest {
 
         private int callCount() {
             return callCount.get();
+        }
+
+        private boolean started() {
+            return callCount.get() > 0;
         }
     }
 

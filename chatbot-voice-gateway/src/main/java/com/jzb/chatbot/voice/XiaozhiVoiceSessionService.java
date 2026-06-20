@@ -16,6 +16,7 @@ import com.jzb.chatbot.voice.hermes.HermesAgentEventExtractor;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpBridge;
 import com.jzb.chatbot.voice.music.XiaozhiMusicActionHandler;
 import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRuntime;
+import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackState;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientHello;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
@@ -467,6 +468,11 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     ) {
         if ("barge_in".equals(message.mode())) {
             handleBargeInStart(webSocketSession, voiceSession);
+            return;
+        }
+        if ("auto".equals(message.mode()) && musicPlaying(voiceSession)) {
+            log.info("ignore xiaozhi auto listen while music playing, sessionId={}, deviceId={}",
+                    webSocketSession.getId(), voiceSession.deviceId());
             return;
         }
         stopMusic(voiceSession);
@@ -1529,6 +1535,14 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         if (musicPlaybackRuntime != null && voiceSession != null) {
             musicPlaybackRuntime.stop(voiceSession.deviceId());
         }
+    }
+
+    private boolean musicPlaying(XiaozhiVoiceSession voiceSession) {
+        if (musicPlaybackRuntime == null || voiceSession == null) {
+            return false;
+        }
+        return musicPlaybackRuntime.state(voiceSession.deviceId()).status()
+                == XiaozhiMusicPlaybackState.Status.PLAYING;
     }
 
     private PlaybackResult speakWithRuntime(
