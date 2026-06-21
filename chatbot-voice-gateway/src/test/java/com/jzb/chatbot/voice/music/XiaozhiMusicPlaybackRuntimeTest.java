@@ -95,6 +95,39 @@ class XiaozhiMusicPlaybackRuntimeTest {
     }
 
     @Test
+    void shouldResumeControlPausedMusicWhenManualResumeArrives() {
+        var properties = new XiaozhiMusicPlaybackProperties(
+                true,
+                "ffmpeg",
+                Duration.ofSeconds(3),
+                Duration.ofMinutes(5),
+                Set.of("example.com")
+        );
+        var runtime = new XiaozhiMusicPlaybackRuntime(
+                new MusicAudioSource(properties, host -> List.of(InetAddress.getByName("93.184.216.34"))),
+                new TestFfmpegMusicDecoder(),
+                new MusicFrameSender(new XiaozhiMessageCodec(new ObjectMapper())),
+                properties
+        );
+        var webSocketSession = new TestWebSocketSession("ws-session-1");
+        var voiceSession = new XiaozhiVoiceSession("session-1");
+        voiceSession.updateHandshake(null, "device-1", "client-1", 1);
+
+        runtime.play(new XiaozhiMusicPlaybackRequest(
+                webSocketSession,
+                voiceSession,
+                "第一首",
+                "歌手",
+                "https://example.com/one.mp3"
+        ));
+        runtime.pause("device-1", XiaozhiMusicPlaybackState.PauseSource.CONTROL);
+        runtime.resume("device-1", XiaozhiMusicPlaybackState.PauseSource.MANUAL);
+
+        assertThat(runtime.state("device-1").status()).isEqualTo(XiaozhiMusicPlaybackState.Status.PLAYING);
+        assertThat(runtime.state("device-1").pauseSource()).isNull();
+    }
+
+    @Test
     void shouldExposePlaybackTraceInStateAndGenerateMissingRequestId() {
         var properties = new XiaozhiMusicPlaybackProperties(
                 true,

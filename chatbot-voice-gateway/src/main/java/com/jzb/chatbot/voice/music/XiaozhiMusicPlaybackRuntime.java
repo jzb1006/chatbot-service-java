@@ -300,6 +300,7 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
         private void resume(XiaozhiMusicPlaybackState.PauseSource source) {
             if (source == XiaozhiMusicPlaybackState.PauseSource.MANUAL) {
                 manualPaused.set(false);
+                controlPaused.set(false);
             } else if (source == XiaozhiMusicPlaybackState.PauseSource.TTS) {
                 ttsPaused.set(false);
             } else if (source == XiaozhiMusicPlaybackState.PauseSource.CONTROL) {

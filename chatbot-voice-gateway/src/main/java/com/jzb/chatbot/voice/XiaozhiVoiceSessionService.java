@@ -469,12 +469,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             handleBargeInStart(webSocketSession, voiceSession);
             return;
         }
-        if ("auto".equals(message.mode()) && musicPlaying(voiceSession)) {
-            log.info("ignore xiaozhi auto listen while music playing, sessionId={}, deviceId={}",
-                    webSocketSession.getId(), voiceSession.deviceId());
-            return;
-        }
-        if (musicPlaying(voiceSession)) {
+        if (musicActive(voiceSession)) {
             pauseMusicForControl(voiceSession);
         } else {
             stopMusic(voiceSession);
@@ -855,6 +850,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                     return;
                 }
                 if ("auto".equals(asrTurn.listenMode())) {
+                    resumeControlMusic(voiceSession);
                     voiceSession.markIdleIfAsrTurn(asrTurn);
                     return;
                 }
@@ -1524,12 +1520,19 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         }
     }
 
-    private boolean musicPlaying(XiaozhiVoiceSession voiceSession) {
+    private void resumeControlMusic(XiaozhiVoiceSession voiceSession) {
+        if (musicPlaybackRuntime != null && voiceSession != null) {
+            musicPlaybackRuntime.resume(voiceSession.deviceId(), XiaozhiMusicPlaybackState.PauseSource.CONTROL);
+        }
+    }
+
+    private boolean musicActive(XiaozhiVoiceSession voiceSession) {
         if (musicPlaybackRuntime == null || voiceSession == null) {
             return false;
         }
-        return musicPlaybackRuntime.state(voiceSession.deviceId()).status()
-                == XiaozhiMusicPlaybackState.Status.PLAYING;
+        var status = musicPlaybackRuntime.state(voiceSession.deviceId()).status();
+        return status == XiaozhiMusicPlaybackState.Status.PLAYING
+                || status == XiaozhiMusicPlaybackState.Status.PAUSED;
     }
 
     private PlaybackResult speakWithRuntime(
@@ -1545,6 +1548,10 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             var profile = voiceProfileResolver.resolve(voiceSession.deviceId());
             if (cancelledBeforeRuntime(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
                 return PlaybackResult.cancelledBeforeRuntime();
+            }
+            if (sentences.stream().noneMatch(sentence -> sentence != null && !sentence.isBlank())) {
+                voiceSession.markIdleIfTurnActive(turnGeneration);
+                return PlaybackResult.completed(new XiaozhiTtsResult(false, 0, 0, false), 0);
             }
             var runtimeStartedAt = System.nanoTime();
             voiceSession.updateCurrentSpeakingText(String.join("", sentences));

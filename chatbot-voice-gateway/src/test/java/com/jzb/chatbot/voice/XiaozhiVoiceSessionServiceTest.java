@@ -892,8 +892,41 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
-    void shouldIgnoreAutoListenWhenMusicIsPlaying() {
-        var streamingSpeech = new RecordingStreamingSpeechToTextClient("ping", "streaming-provider");
+    void shouldStartControlListenWhenAutoListenArrivesDuringMusicPlayback() {
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("暂停一下", "streaming-provider");
+        var musicRuntime = new CapturingMusicPlaybackRuntime();
+        musicRuntime.markPlaying("晴天");
+        var serviceWithMusic = newServiceWithBargeInControlIntent(
+                new StaticSseHermesClient("""
+                        event: xiaozhi.agent_event
+                        data: {"action":"music_pause"}
+
+                        """),
+                streamingSpeech,
+                new FakeTextToSpeechClient(),
+                musicRuntime,
+                false
+        );
+        var session = openSession(serviceWithMusic);
+
+        serviceWithMusic.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+        serviceWithMusic.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitMusicEvent(musicRuntime, "pause:ws-session-1:MANUAL")).isTrue();
+        assertThat(musicRuntime.events()).contains("pause:ws-session-1:CONTROL");
+        assertThat(musicRuntime.events()).contains("pause:ws-session-1:MANUAL");
+        assertThat(musicRuntime.events()).doesNotContain("stop:ws-session-1");
+        assertThat(streamingSpeech.callCount()).isEqualTo(1);
+        assertThat(serviceWithMusic.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+    }
+
+    @Test
+    void shouldResumeControlPausedMusicWhenAutoListenIsBlank() {
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient(" ", "streaming-provider");
         var musicRuntime = new CapturingMusicPlaybackRuntime();
         musicRuntime.markPlaying("晴天");
         var serviceWithMusic = newServiceWithBargeInControlIntent(
@@ -908,9 +941,50 @@ class XiaozhiVoiceSessionServiceTest {
         serviceWithMusic.handleText(session, new XiaozhiClientMessage(
                 "listen", "start", "auto", null, null, "ws-session-1", null
         ));
+        serviceWithMusic.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", "auto", null, null, "ws-session-1", null
+        ));
 
+        assertThat(awaitMusicEvent(musicRuntime, "resume:ws-session-1:CONTROL")).isTrue();
+        assertThat(musicRuntime.events()).containsExactly(
+                "pause:ws-session-1:CONTROL",
+                "resume:ws-session-1:CONTROL"
+        );
+        assertThat(streamingSpeech.callCount()).isEqualTo(1);
+    }
+
+    @Test
+    void shouldResumePausedMusicWhenAutoResumeCommandArrives() {
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("继续播放", "streaming-provider");
+        var musicRuntime = new CapturingMusicPlaybackRuntime();
+        musicRuntime.markPausedForControl("晴天");
+        var serviceWithMusic = newServiceWithBargeInControlIntent(
+                new StaticSseHermesClient("""
+                        event: xiaozhi.agent_event
+                        data: {"action":"music_resume"}
+
+                        """),
+                streamingSpeech,
+                new FakeTextToSpeechClient(),
+                musicRuntime,
+                false
+        );
+        var session = openSession(serviceWithMusic);
+
+        serviceWithMusic.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+        serviceWithMusic.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitMusicEvent(musicRuntime, "resume:ws-session-1:MANUAL")).isTrue();
+        assertThat(musicRuntime.events()).contains(
+                "pause:ws-session-1:CONTROL",
+                "resume:ws-session-1:MANUAL"
+        );
         assertThat(musicRuntime.events()).doesNotContain("stop:ws-session-1");
-        assertThat(streamingSpeech.started()).isFalse();
+        assertThat(streamingSpeech.callCount()).isEqualTo(1);
         assertThat(serviceWithMusic.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
     }
 
@@ -2774,6 +2848,10 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     private boolean awaitMusicStop(CapturingMusicPlaybackRuntime musicRuntime, String event) {
+        return awaitMusicEvent(musicRuntime, event);
+    }
+
+    private boolean awaitMusicEvent(CapturingMusicPlaybackRuntime musicRuntime, String event) {
         var deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
         while (System.nanoTime() < deadline) {
             if (musicRuntime.events().contains(event)) {
@@ -3443,9 +3521,9 @@ class XiaozhiVoiceSessionServiceTest {
 
     private static class CapturingMusicPlaybackRuntime extends XiaozhiMusicPlaybackRuntime {
 
-        private final java.util.ArrayList<String> playedTitles = new java.util.ArrayList<>();
-        private final java.util.ArrayList<String> playedPausedForTtsTitles = new java.util.ArrayList<>();
-        private final java.util.ArrayList<String> events = new java.util.ArrayList<>();
+        private final java.util.List<String> playedTitles = new java.util.concurrent.CopyOnWriteArrayList<>();
+        private final java.util.List<String> playedPausedForTtsTitles = new java.util.concurrent.CopyOnWriteArrayList<>();
+        private final java.util.List<String> events = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         private CapturingMusicPlaybackRuntime() {
             super(null, null, null, new com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackProperties(
@@ -3477,6 +3555,20 @@ class XiaozhiVoiceSessionServiceTest {
         @Override
         public void pause(String deviceId, XiaozhiMusicPlaybackState.PauseSource source) {
             events.add("pause:" + deviceId + ":" + source);
+        }
+
+        @Override
+        public void resume(String deviceId, XiaozhiMusicPlaybackState.PauseSource source) {
+            events.add("resume:" + deviceId + ":" + source);
+        }
+
+        @Override
+        public void resume(
+                org.springframework.web.socket.WebSocketSession webSocketSession,
+                XiaozhiVoiceSession voiceSession,
+                XiaozhiMusicPlaybackState.PauseSource source
+        ) {
+            events.add("resume:" + voiceSession.deviceId() + ":" + source);
         }
 
         private List<String> playedTitles() {
@@ -3516,6 +3608,10 @@ class XiaozhiVoiceSessionServiceTest {
 
         private void markPlaying(String title) {
             playedTitles.add(title);
+        }
+
+        private void markPausedForControl(String title) {
+            playedPausedForTtsTitles.add(title);
         }
     }
 
