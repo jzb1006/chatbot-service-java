@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
 class TencentCloudTextToSpeechClientTest {
 
     @Test
-    void shouldUseNaturalLargeModelVoiceByDefault() {
+    void shouldUsePremiumVoiceByDefault() {
         var config = new TencentCloudTextToSpeechConfig(
                 "secret-id",
                 "secret-key",
@@ -27,7 +27,7 @@ class TencentCloudTextToSpeechClientTest {
                 null
         );
 
-        assertThat(config.voiceType()).isEqualTo("603004");
+        assertThat(config.voiceType()).isEqualTo("101001");
     }
 
     @Test

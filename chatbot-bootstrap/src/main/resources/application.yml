@@ -82,7 +82,7 @@ chatbot:
         secret-key: ${TENCENT_CLOUD_SECRET_KEY:}
         region: ap-guangzhou
         endpoint: tts.tencentcloudapi.com
-        voice-type: ${TENCENT_CLOUD_TTS_VOICE_TYPE:603004}
+        voice-type: ${TENCENT_CLOUD_TTS_VOICE_TYPE:101001}
         codec: pcm
         sample-rate: 16000
         timeout-seconds: 15

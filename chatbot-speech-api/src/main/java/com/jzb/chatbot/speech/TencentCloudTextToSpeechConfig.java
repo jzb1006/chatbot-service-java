@@ -23,7 +23,7 @@ public record TencentCloudTextToSpeechConfig(
 
     private static final String DEFAULT_ENDPOINT = "tts.tencentcloudapi.com";
     private static final String DEFAULT_REGION = "ap-guangzhou";
-    private static final String DEFAULT_VOICE_TYPE = "603004";
+    private static final String DEFAULT_VOICE_TYPE = "101001";
     private static final String DEFAULT_CODEC = "pcm";
     private static final int DEFAULT_SAMPLE_RATE = 16000;
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(15);
