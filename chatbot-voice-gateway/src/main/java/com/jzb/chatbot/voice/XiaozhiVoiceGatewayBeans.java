@@ -11,6 +11,8 @@ import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeStreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
 import com.jzb.chatbot.speech.SpeechToTextClient;
+import com.jzb.chatbot.speech.SherpaOnnxSpeechToTextConfig;
+import com.jzb.chatbot.speech.SherpaOnnxStreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.StreamingTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextClient;
@@ -175,9 +177,25 @@ public class XiaozhiVoiceGatewayBeans {
             @Value("${chatbot.voice.asr.tencent.engine-model-type:16k_zh}") String engineModelType,
             @Value("${chatbot.voice.asr.tencent.sample-rate:16000}") int sampleRate,
             @Value("${chatbot.voice.asr.tencent.chunk-timeout-millis:100}") long chunkTimeoutMillis,
-            @Value("${chatbot.voice.asr.tencent.recognition-timeout-seconds:90}") long recognitionTimeoutSeconds
+            @Value("${chatbot.voice.asr.tencent.recognition-timeout-seconds:90}") long recognitionTimeoutSeconds,
+            @Value("${chatbot.voice.asr.sherpa-onnx.url:}") String sherpaOnnxUrl,
+            @Value("${chatbot.voice.asr.sherpa-onnx.chunk-timeout-millis:100}") long sherpaOnnxChunkTimeoutMillis,
+            @Value("${chatbot.voice.asr.sherpa-onnx.recognition-timeout-seconds:90}") long sherpaOnnxRecognitionTimeoutSeconds
     ) {
-        if (!mode.streaming() || !"tencent".equalsIgnoreCase(provider)) {
+        if (!mode.streaming()) {
+            return new FakeStreamingSpeechToTextClient();
+        }
+        if ("sherpa-onnx".equalsIgnoreCase(provider)) {
+            if (sherpaOnnxUrl.isBlank()) {
+                throw new IllegalStateException("Sherpa-ONNX ASR requires url");
+            }
+            return new SherpaOnnxStreamingSpeechToTextClient(new SherpaOnnxSpeechToTextConfig(
+                    sherpaOnnxUrl,
+                    Duration.ofMillis(sherpaOnnxChunkTimeoutMillis),
+                    Duration.ofSeconds(sherpaOnnxRecognitionTimeoutSeconds)
+            ));
+        }
+        if (!"tencent".equalsIgnoreCase(provider)) {
             return new FakeStreamingSpeechToTextClient();
         }
         if (appId.isBlank() || secretId.isBlank() || secretKey.isBlank()) {

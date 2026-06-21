@@ -72,6 +72,10 @@ chatbot:
         timeout-seconds: 15
         chunk-timeout-millis: ${TENCENT_CLOUD_ASR_CHUNK_TIMEOUT_MILLIS:100}
         recognition-timeout-seconds: ${TENCENT_CLOUD_ASR_RECOGNITION_TIMEOUT_SECONDS:90}
+      sherpa-onnx:
+        url: ${SHERPA_ONNX_ASR_URL:}
+        chunk-timeout-millis: ${SHERPA_ONNX_ASR_CHUNK_TIMEOUT_MILLIS:100}
+        recognition-timeout-seconds: ${SHERPA_ONNX_ASR_RECOGNITION_TIMEOUT_SECONDS:90}
     tts:
       default-speed: ${CHATBOT_VOICE_TTS_DEFAULT_SPEED:1.0}
       default-pitch: ${CHATBOT_VOICE_TTS_DEFAULT_PITCH:1.0}

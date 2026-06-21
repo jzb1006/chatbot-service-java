@@ -11,6 +11,7 @@ import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeStreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
 import com.jzb.chatbot.speech.SpeechToTextClient;
+import com.jzb.chatbot.speech.SherpaOnnxStreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.StreamingTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextClient;
@@ -318,6 +319,21 @@ class XiaozhiVoiceGatewayBeansTest {
                     var client = context.getBean(StreamingSpeechToTextClient.class);
 
                     assertThat(client).isInstanceOf(TencentRealtimeSpeechToTextClient.class);
+                });
+    }
+
+    @Test
+    void shouldUseSherpaOnnxStreamingSpeechToTextWhenConfigured() {
+        contextRunner
+                .withPropertyValues(
+                        "chatbot.voice.asr.mode=streaming",
+                        "chatbot.voice.asr.provider=sherpa-onnx",
+                        "chatbot.voice.asr.sherpa-onnx.url=ws://sherpa-asr:6006"
+                )
+                .run(context -> {
+                    var client = context.getBean(StreamingSpeechToTextClient.class);
+
+                    assertThat(client).isInstanceOf(SherpaOnnxStreamingSpeechToTextClient.class);
                 });
     }
 
