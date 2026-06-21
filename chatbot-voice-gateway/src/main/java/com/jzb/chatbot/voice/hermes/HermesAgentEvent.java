@@ -13,10 +13,65 @@ public record HermesAgentEvent(
         String message,
         long delaySeconds,
         String confirmationText,
+        String dueText,
         String mediaUrl,
         String title,
         String artist,
         long positionSeconds,
-        String reason
+        String reason,
+        String requestId,
+        String source,
+        double confidence,
+        String matchReason
 ) {
+
+    public HermesAgentEvent(
+            String action,
+            String message,
+            long delaySeconds,
+            String confirmationText,
+            String dueText,
+            String mediaUrl,
+            String title,
+            String artist,
+            long positionSeconds,
+            String reason
+    ) {
+        this(action, message, delaySeconds, confirmationText, dueText, mediaUrl, title, artist, positionSeconds, reason,
+                null, null, 0.0D, null);
+    }
+
+    public HermesAgentEvent(
+            String action,
+            String message,
+            long delaySeconds,
+            String confirmationText,
+            String mediaUrl,
+            String title,
+            String artist,
+            long positionSeconds,
+            String reason
+    ) {
+        this(action, message, delaySeconds, confirmationText, null, mediaUrl, title, artist, positionSeconds, reason,
+                null, null, 0.0D, null);
+    }
+
+    public HermesAgentEvent(
+            String action,
+            String message,
+            long delaySeconds,
+            String confirmationText,
+            String mediaUrl,
+            String title,
+            String artist,
+            long positionSeconds,
+            String reason,
+            String requestId,
+            String source,
+            double confidence,
+            String matchReason
+    ) {
+        this(action, message, delaySeconds, confirmationText, null, mediaUrl, title, artist, positionSeconds, reason,
+                requestId, source, confidence, matchReason);
+    }
 }

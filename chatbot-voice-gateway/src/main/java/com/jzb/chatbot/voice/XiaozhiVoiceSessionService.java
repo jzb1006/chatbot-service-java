@@ -474,7 +474,11 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                     webSocketSession.getId(), voiceSession.deviceId());
             return;
         }
-        stopMusic(voiceSession);
+        if (musicPlaying(voiceSession)) {
+            pauseMusicForControl(voiceSession);
+        } else {
+            stopMusic(voiceSession);
+        }
         cancelCurrentTurnPlayback(voiceSession);
         if (asrMode.streaming()) {
             var asrTurn = voiceSession.startAsrStream(audioParams.sampleRate(), message.mode());
@@ -1434,7 +1438,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         if (!"create_reminder".equals(event.action())) {
             return null;
         }
-        publishReminderRequest(voiceSession, event.message(), event.delaySeconds());
+        publishReminderRequest(voiceSession, event.message(), event.dueText(), event.delaySeconds());
         var confirmationText = event.confirmationText() == null ? "" : event.confirmationText();
         return turnGuard.active() ? confirmationText : null;
     }
@@ -1494,10 +1498,16 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         return event != null && event.action() != null && event.action().startsWith("music_");
     }
 
-    private void publishReminderRequest(XiaozhiVoiceSession voiceSession, String message, long delaySeconds) {
+    private void publishReminderRequest(XiaozhiVoiceSession voiceSession, String message, String dueText, long delaySeconds) {
+        if (dueText == null || dueText.isBlank()) {
+            log.warn("xiaozhi reminder event ignored because dueText is blank, sessionId={}, deviceId={}, message={}",
+                    voiceSession.sessionId(), voiceSession.deviceId(), message);
+            return;
+        }
         eventPublisher.publishEvent(new XiaozhiReminderRequestedEvent(
                 voiceSession.deviceId(),
                 message,
+                dueText,
                 delaySeconds
         ));
     }
@@ -1505,6 +1515,12 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     private void stopMusic(XiaozhiVoiceSession voiceSession) {
         if (musicPlaybackRuntime != null && voiceSession != null) {
             musicPlaybackRuntime.stop(voiceSession.deviceId());
+        }
+    }
+
+    private void pauseMusicForControl(XiaozhiVoiceSession voiceSession) {
+        if (musicPlaybackRuntime != null && voiceSession != null) {
+            musicPlaybackRuntime.pause(voiceSession.deviceId(), XiaozhiMusicPlaybackState.PauseSource.CONTROL);
         }
     }
 

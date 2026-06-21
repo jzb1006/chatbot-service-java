@@ -1,6 +1,7 @@
 package com.jzb.chatbot.voice.music;
 
 import com.jzb.chatbot.voice.protocol.XiaozhiServerEventFactory;
+import com.jzb.chatbot.voice.XiaozhiVoiceSession;
 import java.io.IOException;
 import java.net.URI;
 import java.util.Map;
@@ -8,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
 
 /**
  * 小智音乐播放运行时。
@@ -29,6 +31,8 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
     private final XiaozhiMusicPlaybackProperties properties;
     private final XiaozhiServerEventFactory eventFactory;
     private final Map<String, PlaybackTask> tasks = new ConcurrentHashMap<>();
+    private final Map<String, XiaozhiMusicPlaybackState> lastStates = new ConcurrentHashMap<>();
+    private final Map<String, XiaozhiMusicPlaybackRequest> lastRequests = new ConcurrentHashMap<>();
 
     public XiaozhiMusicPlaybackRuntime(
             MusicAudioSource audioSource,
@@ -69,8 +73,11 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
         stop(deviceId);
         var task = new PlaybackTask(request, initialPauseSource);
         tasks.put(deviceId, task);
-        log.info("xiaozhi music playback requested, deviceId={}, title={}, artist={}, mediaHost={}, initialPauseSource={}",
-                deviceId, request.title(), request.artist(), mediaHost(request.mediaUrl()), initialPauseSource);
+        lastStates.put(deviceId, stoppedState(task));
+        lastRequests.put(deviceId, request);
+        log.info("xiaozhi music playback requested, deviceId={}, requestId={}, requestIdSource={}, source={}, title={}, artist={}, mediaHost={}, initialPauseSource={}",
+                deviceId, request.requestId(), request.requestIdSource(), request.source(), request.title(),
+                request.artist(), mediaHost(request.mediaUrl()), initialPauseSource);
         Thread.ofVirtual().name("xiaozhi-music-" + deviceId).start(() -> run(deviceId, task));
     }
 
@@ -91,6 +98,36 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
             task.resume(source);
             log.info("xiaozhi music playback resumed, deviceId={}, source={}, status={}",
                     deviceId, source, task.state().status());
+            return;
+        }
+    }
+
+    public void resume(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiMusicPlaybackState.PauseSource source
+    ) {
+        var deviceId = voiceSession.deviceId();
+        var task = tasks.get(deviceId);
+        if (task != null) {
+            task.resume(source);
+            log.info("xiaozhi music playback resumed, deviceId={}, source={}, status={}",
+                    deviceId, source, task.state().status());
+            return;
+        }
+        var lastRequest = lastRequests.get(deviceId);
+        if (lastRequest != null) {
+            log.info("xiaozhi music playback replaying last track, deviceId={}, requestId={}, source={}",
+                    deviceId, lastRequest.requestId(), source);
+            play(new XiaozhiMusicPlaybackRequest(
+                    webSocketSession,
+                    voiceSession,
+                    lastRequest.title(),
+                    lastRequest.artist(),
+                    lastRequest.mediaUrl(),
+                    lastRequest.requestId(),
+                    lastRequest.source()
+            ));
         }
     }
 
@@ -98,14 +135,19 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
         var task = tasks.remove(deviceId);
         if (task != null) {
             task.cancel();
+            lastStates.put(deviceId, stoppedState(task));
         }
     }
 
     public XiaozhiMusicPlaybackState state(String deviceId) {
         var task = tasks.get(deviceId);
-        return task == null ? new XiaozhiMusicPlaybackState(
+        if (task != null) {
+            return task.state();
+        }
+        var lastState = lastStates.get(deviceId);
+        return lastState == null ? new XiaozhiMusicPlaybackState(
                 deviceId, null, null, XiaozhiMusicPlaybackState.Status.STOPPED, null
-        ) : task.state();
+        ) : lastState;
     }
 
     private void run(String deviceId, PlaybackTask task) {
@@ -125,17 +167,31 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
                         },
                         task::markIdle
                 );
-                log.info("xiaozhi music playback finished, deviceId={}, title={}, sentFrames={}",
-                        deviceId, task.request.title(), sentFrames);
+                log.info("xiaozhi music playback finished, deviceId={}, requestId={}, title={}, sentFrames={}",
+                        deviceId, task.request.requestId(), task.request.title(), sentFrames);
             }
         } catch (IOException | RuntimeException exception) {
-            log.warn("xiaozhi music playback failed, deviceId={}, title={}, message={}",
-                    deviceId, task.request.title(), exception.getMessage(), exception);
+            log.warn("xiaozhi music playback failed, deviceId={}, requestId={}, title={}, message={}",
+                    deviceId, task.request.requestId(), task.request.title(), exception.getMessage(), exception);
             sendPlaybackFailure(task, exception);
         } finally {
             sendMediaStop(task);
+            lastStates.put(deviceId, stoppedState(task));
             tasks.remove(deviceId, task);
         }
+    }
+
+    private XiaozhiMusicPlaybackState stoppedState(PlaybackTask task) {
+        return new XiaozhiMusicPlaybackState(
+                task.request.voiceSession().deviceId(),
+                task.request.title(),
+                task.request.artist(),
+                XiaozhiMusicPlaybackState.Status.STOPPED,
+                null,
+                task.request.requestId(),
+                task.request.requestIdSource(),
+                task.request.source()
+        );
     }
 
     private void sendMediaStartOnce(PlaybackTask task) {
@@ -147,7 +203,9 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
                     task.request.voiceSession().sessionId(),
                     "music",
                     task.request.title(),
-                    task.request.artist()
+                    task.request.artist(),
+                    task.request.requestId(),
+                    task.request.source()
             )));
             task.markMediaStarted();
         } catch (IOException exception) {
@@ -218,6 +276,7 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
         private final AtomicBoolean sending = new AtomicBoolean();
         private final AtomicBoolean manualPaused = new AtomicBoolean();
         private final AtomicBoolean ttsPaused = new AtomicBoolean();
+        private final AtomicBoolean controlPaused = new AtomicBoolean();
         private final AtomicBoolean mediaStarted = new AtomicBoolean();
 
         private PlaybackTask(
@@ -233,6 +292,8 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
                 manualPaused.set(true);
             } else if (source == XiaozhiMusicPlaybackState.PauseSource.TTS) {
                 ttsPaused.set(true);
+            } else if (source == XiaozhiMusicPlaybackState.PauseSource.CONTROL) {
+                controlPaused.set(true);
             }
         }
 
@@ -241,6 +302,8 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
                 manualPaused.set(false);
             } else if (source == XiaozhiMusicPlaybackState.PauseSource.TTS) {
                 ttsPaused.set(false);
+            } else if (source == XiaozhiMusicPlaybackState.PauseSource.CONTROL) {
+                controlPaused.set(false);
             }
         }
 
@@ -253,7 +316,7 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
         }
 
         private boolean paused() {
-            return manualPaused.get() || ttsPaused.get();
+            return manualPaused.get() || ttsPaused.get() || controlPaused.get();
         }
 
         private void markSending() {
@@ -294,13 +357,19 @@ public class XiaozhiMusicPlaybackRuntime implements XiaozhiMusicPlaybackCoordina
                     request.title(),
                     request.artist(),
                     paused() ? XiaozhiMusicPlaybackState.Status.PAUSED : XiaozhiMusicPlaybackState.Status.PLAYING,
-                    pauseSource()
+                    pauseSource(),
+                    request.requestId(),
+                    request.requestIdSource(),
+                    request.source()
             );
         }
 
         private XiaozhiMusicPlaybackState.PauseSource pauseSource() {
             if (manualPaused.get()) {
                 return XiaozhiMusicPlaybackState.PauseSource.MANUAL;
+            }
+            if (controlPaused.get()) {
+                return XiaozhiMusicPlaybackState.PauseSource.CONTROL;
             }
             return ttsPaused.get() ? XiaozhiMusicPlaybackState.PauseSource.TTS : null;
         }

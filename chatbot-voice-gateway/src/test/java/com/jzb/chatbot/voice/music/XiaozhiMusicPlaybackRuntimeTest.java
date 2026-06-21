@@ -95,6 +95,157 @@ class XiaozhiMusicPlaybackRuntimeTest {
     }
 
     @Test
+    void shouldExposePlaybackTraceInStateAndGenerateMissingRequestId() {
+        var properties = new XiaozhiMusicPlaybackProperties(
+                true,
+                "ffmpeg",
+                Duration.ofSeconds(3),
+                Duration.ofMinutes(5),
+                Set.of("example.com")
+        );
+        var runtime = new XiaozhiMusicPlaybackRuntime(
+                new MusicAudioSource(properties, host -> List.of(InetAddress.getByName("93.184.216.34"))),
+                new TestFfmpegMusicDecoder(),
+                new MusicFrameSender(new XiaozhiMessageCodec(new ObjectMapper())),
+                properties
+        );
+        var webSocketSession = new TestWebSocketSession("ws-session-1");
+        var voiceSession = new XiaozhiVoiceSession("session-1");
+        voiceSession.updateHandshake(null, "device-1", "client-1", 1);
+
+        runtime.play(new XiaozhiMusicPlaybackRequest(
+                webSocketSession,
+                voiceSession,
+                "晴天",
+                "周杰伦",
+                "https://example.com/qingtian.mp3",
+                null,
+                "buguyy"
+        ));
+
+        assertThat(runtime.state("device-1").requestId()).startsWith("local-");
+        assertThat(runtime.state("device-1").requestIdSource()).isEqualTo("generated");
+        assertThat(runtime.state("device-1").source()).isEqualTo("buguyy");
+    }
+
+    @Test
+    void shouldKeepLastTrackWhenPlaybackStops() {
+        var properties = new XiaozhiMusicPlaybackProperties(
+                true,
+                "ffmpeg",
+                Duration.ofSeconds(3),
+                Duration.ofMinutes(5),
+                Set.of("example.com")
+        );
+        var runtime = new XiaozhiMusicPlaybackRuntime(
+                new MusicAudioSource(properties, host -> List.of(InetAddress.getByName("93.184.216.34"))),
+                new TestFfmpegMusicDecoder(),
+                new MusicFrameSender(new XiaozhiMessageCodec(new ObjectMapper())),
+                properties
+        );
+        var webSocketSession = new TestWebSocketSession("ws-session-1");
+        var voiceSession = new XiaozhiVoiceSession("session-1");
+        voiceSession.updateHandshake(null, "device-1", "client-1", 1);
+
+        runtime.play(new XiaozhiMusicPlaybackRequest(
+                webSocketSession,
+                voiceSession,
+                "晴天",
+                "周杰伦",
+                "https://example.com/qingtian.mp3",
+                "music-20260621-001",
+                "buguyy"
+        ));
+        runtime.stop("device-1");
+
+        assertThat(runtime.state("device-1").status()).isEqualTo(XiaozhiMusicPlaybackState.Status.STOPPED);
+        assertThat(runtime.state("device-1").title()).isEqualTo("晴天");
+        assertThat(runtime.state("device-1").artist()).isEqualTo("周杰伦");
+        assertThat(runtime.state("device-1").requestId()).isEqualTo("music-20260621-001");
+        assertThat(runtime.state("device-1").source()).isEqualTo("buguyy");
+    }
+
+    @Test
+    void shouldNotReplayLastTrackWhenTtsResumeHasNoActiveTask() {
+        var properties = new XiaozhiMusicPlaybackProperties(
+                true,
+                "ffmpeg",
+                Duration.ofSeconds(3),
+                Duration.ofMinutes(5),
+                Set.of("example.com")
+        );
+        var runtime = new XiaozhiMusicPlaybackRuntime(
+                new MusicAudioSource(properties, host -> List.of(InetAddress.getByName("93.184.216.34"))),
+                new TestFfmpegMusicDecoder(),
+                new MusicFrameSender(new XiaozhiMessageCodec(new ObjectMapper())),
+                properties
+        );
+        var webSocketSession = new TestWebSocketSession("ws-session-1");
+        var voiceSession = new XiaozhiVoiceSession("session-1");
+        voiceSession.updateHandshake(null, "device-1", "client-1", 1);
+
+        runtime.play(new XiaozhiMusicPlaybackRequest(
+                webSocketSession,
+                voiceSession,
+                "晴天",
+                "周杰伦",
+                "https://example.com/qingtian.mp3",
+                "music-20260621-001",
+                "buguyy"
+        ));
+        runtime.stop("device-1");
+        runtime.resume("device-1", XiaozhiMusicPlaybackState.PauseSource.TTS);
+
+        assertThat(runtime.state("device-1").status()).isEqualTo(XiaozhiMusicPlaybackState.Status.STOPPED);
+        assertThat(runtime.state("device-1").title()).isEqualTo("晴天");
+        assertThat(runtime.state("device-1").requestId()).isEqualTo("music-20260621-001");
+    }
+
+    @Test
+    void shouldReplayLastTrackOnCurrentSessionWhenManualResumeHasNoActiveTask() throws Exception {
+        var properties = new XiaozhiMusicPlaybackProperties(
+                true,
+                "ffmpeg",
+                Duration.ofSeconds(3),
+                Duration.ofMinutes(5),
+                Set.of("example.com")
+        );
+        var runtime = new XiaozhiMusicPlaybackRuntime(
+                new TestMusicAudioSource(properties),
+                new TestFfmpegMusicDecoder(new byte[16000 / 1000 * 60 * Short.BYTES]),
+                new MusicFrameSender(new XiaozhiMessageCodec(new ObjectMapper())),
+                properties,
+                new XiaozhiServerEventFactory(new ObjectMapper())
+        );
+        var oldWebSocketSession = new MessageCountingSession("ws-session-old");
+        var oldVoiceSession = new XiaozhiVoiceSession("session-old");
+        oldVoiceSession.updateHandshake(null, "device-1", "client-1", 1);
+
+        runtime.play(new XiaozhiMusicPlaybackRequest(
+                oldWebSocketSession,
+                oldVoiceSession,
+                "晴天",
+                "周杰伦",
+                "https://example.com/qingtian.mp3",
+                "music-20260621-001",
+                "buguyy"
+        ));
+        assertThat(oldWebSocketSession.awaitMessages(3)).isTrue();
+        oldWebSocketSession.close();
+        var oldMessageCount = oldWebSocketSession.getSentMessages().size();
+        var newWebSocketSession = new MessageCountingSession("ws-session-new");
+        var newVoiceSession = new XiaozhiVoiceSession("session-new");
+        newVoiceSession.updateHandshake(null, "device-1", "client-1", 1);
+
+        runtime.resume(newWebSocketSession, newVoiceSession, XiaozhiMusicPlaybackState.PauseSource.MANUAL);
+
+        assertThat(newWebSocketSession.awaitMessages(3)).isTrue();
+        assertThat(oldWebSocketSession.getSentMessages()).hasSize(oldMessageCount);
+        assertThat(newWebSocketSession.getSentMessages()).anySatisfy(message ->
+                assertThat(message).isInstanceOf(org.springframework.web.socket.BinaryMessage.class));
+    }
+
+    @Test
     void shouldStartPlaybackPausedForTtsAndResumeAfterTtsFinishes() {
         var properties = new XiaozhiMusicPlaybackProperties(
                 true,
@@ -191,7 +342,9 @@ class XiaozhiMusicPlaybackRuntimeTest {
                 voiceSession,
                 "晴天",
                 "周杰伦",
-                "https://example.com/qingtian.mp3"
+                "https://example.com/qingtian.mp3",
+                "music-20260621-001",
+                "buguyy"
         ));
 
         assertThat(webSocketSession.awaitMessages(3)).isTrue();
@@ -201,6 +354,8 @@ class XiaozhiMusicPlaybackRuntimeTest {
                 .contains("\"type\":\"media\"")
                 .contains("\"state\":\"start\"")
                 .contains("\"kind\":\"music\"")
+                .contains("\"request_id\":\"music-20260621-001\"")
+                .contains("\"source\":\"buguyy\"")
                 .contains("\"title\":\"晴天\"")
                 .contains("\"artist\":\"周杰伦\"");
         assertThat(webSocketSession.getSentMessages()).anySatisfy(message ->

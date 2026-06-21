@@ -20,14 +20,61 @@ import org.springframework.web.socket.WebSocketSession;
  */
 public class MusicFrameSender {
 
-    private static final int SAMPLE_RATE = 16000;
-    private static final int FRAME_DURATION_MS = 60;
-    private static final int READ_BUFFER_BYTES = SAMPLE_RATE / 1000 * FRAME_DURATION_MS * Short.BYTES;
+    private static final java.util.Set<Integer> SUPPORTED_OPUS_SAMPLE_RATES = java.util.Set.of(
+            8000, 12000, 16000, 24000, 48000
+    );
 
     private final XiaozhiMessageCodec codec;
+    private final int sampleRate;
+    private final int frameDurationMs;
+    private final int readBufferBytes;
+    private final StreamingPcmToOpusEncoder.Options opusOptions;
 
     public MusicFrameSender(XiaozhiMessageCodec codec) {
+        this(codec, StreamingPcmToOpusEncoder.Options.music16k());
+    }
+
+    public MusicFrameSender(XiaozhiMessageCodec codec, StreamingPcmToOpusEncoder.Options opusOptions) {
+        this(
+                codec,
+                XiaozhiMusicPlaybackProperties.DEFAULT_SAMPLE_RATE,
+                XiaozhiMusicPlaybackProperties.DEFAULT_FRAME_DURATION_MS,
+                opusOptions
+        );
+    }
+
+    public MusicFrameSender(
+            XiaozhiMessageCodec codec,
+            int sampleRate,
+            int frameDurationMs,
+            StreamingPcmToOpusEncoder.Options opusOptions
+    ) {
+        if (sampleRate <= 0) {
+            throw new IllegalArgumentException("sampleRate must be positive");
+        }
+        if (!SUPPORTED_OPUS_SAMPLE_RATES.contains(sampleRate)) {
+            throw new IllegalArgumentException("sampleRate must be one of 8000, 12000, 16000, 24000, 48000");
+        }
+        if (frameDurationMs <= 0) {
+            throw new IllegalArgumentException("frameDurationMs must be positive");
+        }
         this.codec = codec;
+        this.sampleRate = sampleRate;
+        this.frameDurationMs = frameDurationMs;
+        this.readBufferBytes = sampleRate / 1000 * frameDurationMs * Short.BYTES;
+        this.opusOptions = opusOptions == null ? StreamingPcmToOpusEncoder.Options.music16k() : opusOptions;
+    }
+
+    public int sampleRate() {
+        return sampleRate;
+    }
+
+    public int frameDurationMs() {
+        return frameDurationMs;
+    }
+
+    public StreamingPcmToOpusEncoder.Options opusOptions() {
+        return opusOptions;
     }
 
     public int send(
@@ -51,8 +98,8 @@ public class MusicFrameSender {
             Runnable beforeFrameSend,
             Runnable afterFrameSend
     ) throws IOException {
-        var encoder = new StreamingPcmToOpusEncoder(SAMPLE_RATE, FRAME_DURATION_MS);
-        var buffer = new byte[READ_BUFFER_BYTES];
+        var encoder = new StreamingPcmToOpusEncoder(sampleRate, frameDurationMs, opusOptions);
+        var buffer = new byte[readBufferBytes];
         var sentFrames = 0;
         var read = pcmStream.read(buffer);
         while (read >= 0 && !cancelled.getAsBoolean()) {
@@ -99,7 +146,7 @@ public class MusicFrameSender {
 
     private void sleepFrameInterval(BooleanSupplier cancelled) {
         if (!cancelled.getAsBoolean()) {
-            sleepMillis(FRAME_DURATION_MS);
+            sleepMillis(frameDurationMs);
         }
     }
 

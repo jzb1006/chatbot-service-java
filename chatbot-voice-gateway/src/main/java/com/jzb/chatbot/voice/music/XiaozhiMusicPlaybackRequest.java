@@ -1,6 +1,7 @@
 package com.jzb.chatbot.voice.music;
 
 import com.jzb.chatbot.voice.XiaozhiVoiceSession;
+import java.util.UUID;
 import org.springframework.web.socket.WebSocketSession;
 
 /**
@@ -16,6 +17,28 @@ public record XiaozhiMusicPlaybackRequest(
         XiaozhiVoiceSession voiceSession,
         String title,
         String artist,
-        String mediaUrl
+        String mediaUrl,
+        String requestId,
+        String source
 ) {
+
+    public XiaozhiMusicPlaybackRequest {
+        if (requestId == null || requestId.isBlank()) {
+            requestId = "local-" + UUID.randomUUID();
+        }
+    }
+
+    public XiaozhiMusicPlaybackRequest(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            String title,
+            String artist,
+            String mediaUrl
+    ) {
+        this(webSocketSession, voiceSession, title, artist, mediaUrl, null, null);
+    }
+
+    public String requestIdSource() {
+        return requestId.startsWith("local-") ? "generated" : "hermes";
+    }
 }

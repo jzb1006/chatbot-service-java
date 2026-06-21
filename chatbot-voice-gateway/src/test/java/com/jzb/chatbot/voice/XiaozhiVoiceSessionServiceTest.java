@@ -741,16 +741,25 @@ class XiaozhiVoiceSessionServiceTest {
     void shouldUseConfirmationTextFromResponsesDeltaEmbeddedReminderEvent() {
         var hermesClient = new StaticSseHermesClient("""
                 event: response.output_text.delta
-                data: {"delta":"event: xiaozhi.agent_event\\ndata: {\\"action\\":\\"create_reminder\\",\\"message\\":\\"喝水\\",\\"delay_seconds\\":60,\\"confirmation_text\\":\\"1分钟后提醒你喝水\\"}\\n\\n"}
+                data: {"delta":"event: xiaozhi.agent_event\\ndata: {\\"action\\":\\"create_reminder\\",\\"message\\":\\"喝水\\",\\"delay_seconds\\":60,\\"confirmation_text\\":\\"好的，一分钟后提醒你喝水。\\",\\"due_text\\":\\"该喝水了，别忘了。\\"}\\n\\n"}
                 
                 """);
         var ttsClient = new RecordingTextToSpeechClient();
+        var eventPublisher = new RecordingApplicationEventPublisher();
         var serviceWithReminder = newService(new FakeSpeechToTextClient(), hermesClient, ttsClient);
+        serviceWithReminder.setApplicationEventPublisher(eventPublisher);
         var session = openSession(serviceWithReminder);
 
         runSingleTurn(serviceWithReminder, session);
 
-        assertThat(ttsClient.texts()).containsExactly("1分钟后提醒你喝水");
+        assertThat(ttsClient.texts()).containsExactly("好的，一分钟后提醒你喝水。");
+        assertThat(eventPublisher.events())
+                .singleElement()
+                .isInstanceOfSatisfying(XiaozhiReminderRequestedEvent.class, event -> {
+                    assertThat(event.message()).isEqualTo("喝水");
+                    assertThat(event.dueText()).isEqualTo("该喝水了，别忘了。");
+                    assertThat(event.delaySeconds()).isEqualTo(60L);
+                });
     }
 
     @Test
@@ -868,8 +877,9 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
-    void shouldStopMusicWhenUserStartsListening() {
+    void shouldPauseMusicForControlWhenUserStartsListeningDuringPlayback() {
         var musicRuntime = new CapturingMusicPlaybackRuntime();
+        musicRuntime.markPlaying("晴天");
         var serviceWithMusic = newServiceWithMusic(new FakeHermesClient(), new FakeTextToSpeechClient(), musicRuntime);
         var session = openSession(serviceWithMusic);
 
@@ -877,7 +887,8 @@ class XiaozhiVoiceSessionServiceTest {
                 "listen", "start", "manual", null, null, "ws-session-1", null
         ));
 
-        assertThat(musicRuntime.events()).contains("stop:ws-session-1");
+        assertThat(musicRuntime.events()).contains("pause:ws-session-1:CONTROL");
+        assertThat(musicRuntime.events()).doesNotContain("stop:ws-session-1");
     }
 
     @Test
@@ -3461,6 +3472,11 @@ class XiaozhiVoiceSessionServiceTest {
             events.add("stop:" + deviceId);
             playedTitles.clear();
             playedPausedForTtsTitles.clear();
+        }
+
+        @Override
+        public void pause(String deviceId, XiaozhiMusicPlaybackState.PauseSource source) {
+            events.add("pause:" + deviceId + ":" + source);
         }
 
         private List<String> playedTitles() {

@@ -74,11 +74,16 @@ public class HermesAgentEventExtractor {
                     root.path("message").asText(null),
                     root.path("delay_seconds").asLong(0L),
                     root.path("confirmation_text").asText(null),
+                    root.path("due_text").asText(null),
                     root.path("media_url").asText(null),
                     root.path("title").asText(null),
                     root.path("artist").asText(null),
                     root.path("position_seconds").asLong(0L),
-                    root.path("reason").asText(null)
+                    root.path("reason").asText(null),
+                    root.path("request_id").asText(null),
+                    root.path("source").asText(null),
+                    root.path("confidence").asDouble(0.0D),
+                    root.path("match_reason").asText(null)
             ));
         } catch (IOException exception) {
             return java.util.Optional.empty();

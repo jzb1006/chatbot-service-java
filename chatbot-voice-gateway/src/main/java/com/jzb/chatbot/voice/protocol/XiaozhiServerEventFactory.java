@@ -79,11 +79,28 @@ public class XiaozhiServerEventFactory {
     }
 
     public String mediaStart(String sessionId, String kind, String title, String artist) {
+        return mediaStart(sessionId, kind, title, artist, null, null);
+    }
+
+    public String mediaStart(
+            String sessionId,
+            String kind,
+            String title,
+            String artist,
+            String requestId,
+            String source
+    ) {
         var root = objectMapper.createObjectNode()
                 .put("session_id", sessionId)
                 .put("type", "media")
                 .put("state", "start")
                 .put("kind", kind);
+        if (requestId != null && !requestId.isBlank()) {
+            root.put("request_id", requestId);
+        }
+        if (source != null && !source.isBlank()) {
+            root.put("source", source);
+        }
         if (title != null && !title.isBlank()) {
             root.put("title", title);
         }

@@ -21,6 +21,7 @@ import com.jzb.chatbot.speech.TencentRealtimeSpeechToTextClient;
 import com.jzb.chatbot.speech.TextToSpeechClient;
 import com.jzb.chatbot.voice.bargein.XiaozhiBargeInDetector;
 import com.jzb.chatbot.voice.bargein.XiaozhiBargeInProperties;
+import com.jzb.chatbot.voice.music.MusicFrameSender;
 import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackProperties;
 import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRuntime;
 import com.jzb.chatbot.voice.mcp.XiaozhiMcpAdminAuth;
@@ -158,16 +159,29 @@ class XiaozhiVoiceGatewayBeansTest {
                         "chatbot.voice.music.ffmpeg-path=ffmpeg",
                         "chatbot.voice.music.connect-timeout=3s",
                         "chatbot.voice.music.max-duration=5m",
-                        "chatbot.voice.music.allowed-hosts=example.com,cdn.example.com"
+                        "chatbot.voice.music.allowed-hosts=example.com,cdn.example.com",
+                        "chatbot.voice.music.sample-rate=16000",
+                        "chatbot.voice.music.frame-duration-ms=60",
+                        "chatbot.voice.music.bitrate-bps=64000",
+                        "chatbot.voice.music.complexity=10"
                 )
                 .run(context -> {
                     assertThat(context).hasSingleBean(XiaozhiMusicPlaybackRuntime.class);
 
                     var properties = context.getBean(XiaozhiMusicPlaybackProperties.class);
+                    var frameSender = context.getBean(MusicFrameSender.class);
 
                     assertThat(properties.connectTimeout()).isEqualTo(Duration.ofSeconds(3));
                     assertThat(properties.maxDuration()).isEqualTo(Duration.ofMinutes(5));
                     assertThat(properties.allowedHosts()).containsExactlyInAnyOrder("example.com", "cdn.example.com");
+                    assertThat(properties.sampleRate()).isEqualTo(16000);
+                    assertThat(properties.frameDurationMs()).isEqualTo(60);
+                    assertThat(properties.bitrateBps()).isEqualTo(64000);
+                    assertThat(properties.complexity()).isEqualTo(10);
+                    assertThat(frameSender.sampleRate()).isEqualTo(16000);
+                    assertThat(frameSender.frameDurationMs()).isEqualTo(60);
+                    assertThat(frameSender.opusOptions().bitrateBps()).isEqualTo(64000);
+                    assertThat(frameSender.opusOptions().complexity()).isEqualTo(10);
                 });
     }
 

@@ -8,5 +8,5 @@ package com.jzb.chatbot.voice.reminder;
  * @author jiangzhibin
  * @since 2026-06-17 18:34:00
  */
-public record XiaozhiReminderRequestedEvent(String deviceId, String message, long delaySeconds) {
+public record XiaozhiReminderRequestedEvent(String deviceId, String message, String dueText, long delaySeconds) {
 }

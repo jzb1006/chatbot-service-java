@@ -47,7 +47,8 @@ public class XiaozhiMcpGatewayToolService {
         callDeviceProperties.set("arguments", schema("object", "设备 MCP 工具参数对象"));
         var reminderProperties = objectMapper.createObjectNode();
         reminderProperties.set("deviceId", schema("string", "在线小智设备 ID"));
-        reminderProperties.set("message", schema("string", "到点后需要播报给用户的提醒内容"));
+        reminderProperties.set("message", schema("string", "结构化提醒内容，例如“喝水”“出门”，用于记录和审计"));
+        reminderProperties.set("dueText", schema("string", "Hermes 生成的到点播报文本。Java 只按时播放该文本，不再拼接提醒话术"));
         reminderProperties.set("remindAt", schema("string", "ISO-8601 到期时间，例如 2026-06-17T18:00:00+08:00"));
         reminderProperties.set("delaySeconds", schema("integer", "从当前时间开始延迟的秒数，例如一分钟后传 60"));
         tools.add(tool(
@@ -67,9 +68,9 @@ public class XiaozhiMcpGatewayToolService {
         ));
         tools.add(tool(
                 "xiaozhi_create_reminder",
-                "创建一次性提醒，到期后小智设备会主动播报 message。message 必填，remindAt 或 delaySeconds 至少填一个。",
+                "创建一次性提醒，到期后小智设备会主动播报 Hermes 提供的 dueText。message 和 dueText 必填，remindAt 或 delaySeconds 至少填一个。",
                 reminderProperties,
-                List.of("message")
+                List.of("message", "dueText")
         ));
         return tools;
     }
@@ -175,13 +176,15 @@ public class XiaozhiMcpGatewayToolService {
     private ObjectNode createReminder(JsonNode arguments) {
         var deviceId = resolveReminderDeviceId(arguments);
         var message = requiredText(arguments, "message");
+        var dueText = requiredText(arguments, "dueText");
         var reminder = arguments.hasNonNull("delaySeconds")
-                ? reminderService.createAfter(deviceId, message, arguments.path("delaySeconds").asLong())
-                : reminderService.create(deviceId, message, requiredText(arguments, "remindAt"));
+                ? reminderService.createAfter(deviceId, message, dueText, arguments.path("delaySeconds").asLong())
+                : reminderService.create(deviceId, message, dueText, requiredText(arguments, "remindAt"));
         return objectMapper.createObjectNode()
                 .put("id", reminder.id())
                 .put("deviceId", reminder.deviceId())
                 .put("message", reminder.message())
+                .put("dueText", reminder.dueText())
                 .put("remindAt", reminder.remindAt().toString());
     }
 

@@ -14,6 +14,7 @@ import com.jzb.chatbot.speech.SpeechToTextClient;
 import com.jzb.chatbot.speech.SherpaOnnxSpeechToTextConfig;
 import com.jzb.chatbot.speech.SherpaOnnxStreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
+import com.jzb.chatbot.speech.StreamingPcmToOpusEncoder;
 import com.jzb.chatbot.speech.StreamingTextToSpeechClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextClient;
 import com.jzb.chatbot.speech.TencentCloudSpeechToTextConfig;
@@ -48,6 +49,8 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Set;
+import io.github.jaredmdobson.concentus.OpusApplication;
+import io.github.jaredmdobson.concentus.OpusSignal;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -322,7 +325,15 @@ public class XiaozhiVoiceGatewayBeans {
                 binder.bind("chatbot.voice.music.ffmpeg-path", String.class).orElse("ffmpeg"),
                 binder.bind("chatbot.voice.music.connect-timeout", Duration.class).orElse(Duration.ofSeconds(3)),
                 binder.bind("chatbot.voice.music.max-duration", Duration.class).orElse(Duration.ofMinutes(5)),
-                Set.copyOf(allowedHosts)
+                Set.copyOf(allowedHosts),
+                binder.bind("chatbot.voice.music.sample-rate", Integer.class)
+                        .orElse(XiaozhiMusicPlaybackProperties.DEFAULT_SAMPLE_RATE),
+                binder.bind("chatbot.voice.music.frame-duration-ms", Integer.class)
+                        .orElse(XiaozhiMusicPlaybackProperties.DEFAULT_FRAME_DURATION_MS),
+                binder.bind("chatbot.voice.music.bitrate-bps", Integer.class)
+                        .orElse(XiaozhiMusicPlaybackProperties.DEFAULT_BITRATE_BPS),
+                binder.bind("chatbot.voice.music.complexity", Integer.class)
+                        .orElse(XiaozhiMusicPlaybackProperties.DEFAULT_COMPLEXITY)
         );
     }
 
@@ -349,8 +360,19 @@ public class XiaozhiVoiceGatewayBeans {
 
     @Bean
     @ConditionalOnProperty(name = "chatbot.voice.music.enabled", havingValue = "true")
-    MusicFrameSender musicFrameSender(XiaozhiMessageCodec codec) {
-        return new MusicFrameSender(codec);
+    MusicFrameSender musicFrameSender(XiaozhiMessageCodec codec, XiaozhiMusicPlaybackProperties properties) {
+        return new MusicFrameSender(
+                codec,
+                properties.sampleRate(),
+                properties.frameDurationMs(),
+                new StreamingPcmToOpusEncoder.Options(
+                        OpusApplication.OPUS_APPLICATION_AUDIO,
+                        OpusSignal.OPUS_SIGNAL_MUSIC,
+                        properties.bitrateBps(),
+                        properties.complexity(),
+                        true
+                )
+        );
     }
 
     @Bean

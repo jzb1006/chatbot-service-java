@@ -13,8 +13,21 @@ public record XiaozhiMusicPlaybackState(
         String title,
         String artist,
         Status status,
-        PauseSource pauseSource
+        PauseSource pauseSource,
+        String requestId,
+        String requestIdSource,
+        String source
 ) {
+
+    public XiaozhiMusicPlaybackState(
+            String deviceId,
+            String title,
+            String artist,
+            Status status,
+            PauseSource pauseSource
+    ) {
+        this(deviceId, title, artist, status, pauseSource, null, null, null);
+    }
 
     public enum Status {
         PLAYING,
@@ -24,6 +37,7 @@ public record XiaozhiMusicPlaybackState(
 
     public enum PauseSource {
         MANUAL,
-        TTS
+        TTS,
+        CONTROL
     }
 }

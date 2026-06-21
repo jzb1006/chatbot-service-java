@@ -45,12 +45,13 @@ class XiaozhiMcpGatewayToolServiceTest {
         assertThat(tools.get(2).path("inputSchema").path("properties").has("name")).isTrue();
         assertThat(tools.get(2).path("inputSchema").path("properties").has("arguments")).isTrue();
         assertThat(tools.get(3).path("inputSchema").path("properties").has("message")).isTrue();
+        assertThat(tools.get(3).path("inputSchema").path("properties").has("dueText")).isTrue();
         assertThat(tools.get(3).path("inputSchema").path("properties").has("remindAt")).isTrue();
         assertThat(tools.get(3).path("inputSchema").path("properties").has("delaySeconds")).isTrue();
         assertThat(tools.get(3).path("inputSchema").path("required"))
                 .extracting(JsonNode::asText)
-                .contains("message")
-                .doesNotContain("deviceId", "remindAt");
+                .contains("message", "dueText")
+                .doesNotContain("deviceId", "remindAt", "delaySeconds");
     }
 
     @Test
@@ -93,22 +94,25 @@ class XiaozhiMcpGatewayToolServiceTest {
     void shouldCreateReminderForExplicitDevice() throws Exception {
         given(reminderService.create(
                 "device-1",
-                "提醒我喝水",
+                "喝水",
+                "该喝水了，别忘了。",
                 "2026-06-17T18:00:00+08:00"
         )).willReturn(new XiaozhiReminderService.CreatedReminder(
                 "reminder-1",
                 "device-1",
-                "提醒我喝水",
+                "喝水",
+                "该喝水了，别忘了。",
                 java.time.Instant.parse("2026-06-17T10:00:00Z")
         ));
 
         var result = service.call("xiaozhi_create_reminder", objectMapper.readTree("""
-                {"deviceId":"device-1","message":"提醒我喝水","remindAt":"2026-06-17T18:00:00+08:00"}
+                {"deviceId":"device-1","message":"喝水","dueText":"该喝水了，别忘了。","remindAt":"2026-06-17T18:00:00+08:00"}
                 """), Duration.ofSeconds(1));
 
         assertThat(result.path("id").asText()).isEqualTo("reminder-1");
         assertThat(result.path("deviceId").asText()).isEqualTo("device-1");
-        assertThat(result.path("message").asText()).isEqualTo("提醒我喝水");
+        assertThat(result.path("message").asText()).isEqualTo("喝水");
+        assertThat(result.path("dueText").asText()).isEqualTo("该喝水了，别忘了。");
         assertThat(result.path("remindAt").asText()).isEqualTo("2026-06-17T10:00:00Z");
     }
 
@@ -117,17 +121,19 @@ class XiaozhiMcpGatewayToolServiceTest {
         given(bridge.onlineDeviceIds()).willReturn(List.of("device-1"));
         given(reminderService.create(
                 "device-1",
-                "提醒我喝水",
+                "喝水",
+                "该喝水了，别忘了。",
                 "2026-06-17T18:00:00+08:00"
         )).willReturn(new XiaozhiReminderService.CreatedReminder(
                 "reminder-1",
                 "device-1",
-                "提醒我喝水",
+                "喝水",
+                "该喝水了，别忘了。",
                 java.time.Instant.parse("2026-06-17T10:00:00Z")
         ));
 
         var result = service.call("xiaozhi_create_reminder", objectMapper.readTree("""
-                {"message":"提醒我喝水","remindAt":"2026-06-17T18:00:00+08:00"}
+                {"message":"喝水","dueText":"该喝水了，别忘了。","remindAt":"2026-06-17T18:00:00+08:00"}
                 """), Duration.ofSeconds(1));
 
         assertThat(result.path("deviceId").asText()).isEqualTo("device-1");
@@ -136,16 +142,17 @@ class XiaozhiMcpGatewayToolServiceTest {
     @Test
     void shouldCreateReminderFromDelaySeconds() throws Exception {
         given(bridge.onlineDeviceIds()).willReturn(List.of("device-1"));
-        given(reminderService.createAfter("device-1", "提醒我喝水", 60L))
+        given(reminderService.createAfter("device-1", "喝水", "该喝水了，别忘了。", 60L))
                 .willReturn(new XiaozhiReminderService.CreatedReminder(
                         "reminder-1",
                         "device-1",
-                        "提醒我喝水",
+                        "喝水",
+                        "该喝水了，别忘了。",
                         java.time.Instant.parse("2026-06-17T10:00:00Z")
                 ));
 
         var result = service.call("xiaozhi_create_reminder", objectMapper.readTree("""
-                {"message":"提醒我喝水","delaySeconds":60}
+                {"message":"喝水","dueText":"该喝水了，别忘了。","delaySeconds":60}
                 """), Duration.ofSeconds(1));
 
         assertThat(result.path("id").asText()).isEqualTo("reminder-1");

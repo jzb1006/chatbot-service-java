@@ -9,6 +9,7 @@ import java.util.List;
 import io.github.jaredmdobson.concentus.OpusApplication;
 import io.github.jaredmdobson.concentus.OpusEncoder;
 import io.github.jaredmdobson.concentus.OpusException;
+import io.github.jaredmdobson.concentus.OpusSignal;
 
 /**
  * 流式 PCM 到 Opus 编码器。
@@ -26,22 +27,36 @@ public final class StreamingPcmToOpusEncoder {
     private final int frameSamples;
     private final int frameBytes;
     private final OpusEncoder encoder;
+    private final Options options;
     private final ByteArrayOutputStream pending = new ByteArrayOutputStream();
 
     public StreamingPcmToOpusEncoder(int sampleRate, int frameDurationMs) {
+        this(sampleRate, frameDurationMs, Options.voice());
+    }
+
+    public StreamingPcmToOpusEncoder(int sampleRate, int frameDurationMs, Options options) {
         if (sampleRate <= 0) {
             throw new IllegalArgumentException("sampleRate must be positive");
         }
         if (frameDurationMs <= 0) {
             throw new IllegalArgumentException("frameDurationMs must be positive");
         }
+        this.options = options == null ? Options.voice() : options;
         this.frameSamples = sampleRate * frameDurationMs / 1000;
         this.frameBytes = frameSamples * Short.BYTES;
         try {
-            this.encoder = new OpusEncoder(sampleRate, CHANNELS, OpusApplication.OPUS_APPLICATION_VOIP);
+            this.encoder = new OpusEncoder(sampleRate, CHANNELS, this.options.application());
+            this.encoder.setSignalType(this.options.signal());
+            this.encoder.setBitrate(this.options.bitrateBps());
+            this.encoder.setComplexity(this.options.complexity());
+            this.encoder.setUseVBR(this.options.vbr());
         } catch (OpusException exception) {
             throw new IllegalStateException("Failed to create Opus encoder", exception);
         }
+    }
+
+    public Options options() {
+        return options;
     }
 
     /**
@@ -101,6 +116,44 @@ public final class StreamingPcmToOpusEncoder {
             return List.of(ByteBuffer.wrap(output, 0, encodedBytes));
         } catch (OpusException exception) {
             throw new IllegalStateException("Failed to encode streaming PCM to Opus", exception);
+        }
+    }
+
+    public record Options(
+            OpusApplication application,
+            OpusSignal signal,
+            int bitrateBps,
+            int complexity,
+            boolean vbr
+    ) {
+
+        public Options {
+            application = application == null ? OpusApplication.OPUS_APPLICATION_VOIP : application;
+            signal = signal == null ? OpusSignal.OPUS_SIGNAL_AUTO : signal;
+            if (bitrateBps <= 0) {
+                bitrateBps = 32000;
+            }
+            complexity = Math.max(0, Math.min(complexity, 10));
+        }
+
+        public static Options voice() {
+            return new Options(
+                    OpusApplication.OPUS_APPLICATION_VOIP,
+                    OpusSignal.OPUS_SIGNAL_AUTO,
+                    32000,
+                    5,
+                    true
+            );
+        }
+
+        public static Options music16k() {
+            return new Options(
+                    OpusApplication.OPUS_APPLICATION_AUDIO,
+                    OpusSignal.OPUS_SIGNAL_MUSIC,
+                    64000,
+                    10,
+                    true
+            );
         }
     }
 }

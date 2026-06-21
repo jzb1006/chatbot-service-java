@@ -31,10 +31,16 @@ public class XiaozhiMusicActionHandler {
                     voiceSession,
                     event.title(),
                     event.artist(),
-                    event.mediaUrl()
+                    event.mediaUrl(),
+                    event.requestId(),
+                    event.source()
             ));
             case "music_pause" -> musicPlaybackRuntime.pause(deviceId, XiaozhiMusicPlaybackState.PauseSource.MANUAL);
-            case "music_resume" -> musicPlaybackRuntime.resume(deviceId, XiaozhiMusicPlaybackState.PauseSource.MANUAL);
+            case "music_resume" -> musicPlaybackRuntime.resume(
+                    webSocketSession,
+                    voiceSession,
+                    XiaozhiMusicPlaybackState.PauseSource.MANUAL
+            );
             case "music_stop" -> musicPlaybackRuntime.stop(deviceId);
             default -> {
                 return false;

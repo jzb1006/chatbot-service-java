@@ -13,13 +13,14 @@ class HermesAgentEventExtractorTest {
         assertThat(extractor.accept("event: xiaozhi.agent_event\n")).isEmpty();
 
         assertThat(extractor.accept("""
-                data: {"action":"create_reminder","message":"喝水","delay_seconds":60,"confirmation_text":"1分钟后提醒你喝水"}
+                data: {"action":"create_reminder","message":"喝水","delay_seconds":60,"confirmation_text":"好的，一分钟后提醒你喝水。","due_text":"该喝水了，别忘了。"}
 
                 """)).containsExactly(new HermesAgentEvent(
                 "create_reminder",
                 "喝水",
                 60L,
-                "1分钟后提醒你喝水",
+                "好的，一分钟后提醒你喝水。",
+                "该喝水了，别忘了。",
                 null,
                 null,
                 null,
@@ -57,7 +58,7 @@ class HermesAgentEventExtractorTest {
 
         var events = extractor.accept("""
                 event: xiaozhi.agent_event
-                data: {"action":"music_play","title":"稻香","artist":"周杰伦","media_url":"https://example.com/daoxiang.mp3","confirmation_text":"开始播放稻香"}
+                data: {"action":"music_play","request_id":"music-20260621-001","title":"稻香","artist":"周杰伦","media_url":"https://example.com/daoxiang.mp3","source":"buguyy","confidence":0.93,"match_reason":"artist_title_exact","confirmation_text":"开始播放稻香"}
 
                 """);
 
@@ -70,7 +71,11 @@ class HermesAgentEventExtractorTest {
                 "稻香",
                 "周杰伦",
                 0L,
-                null
+                null,
+                "music-20260621-001",
+                "buguyy",
+                0.93,
+                "artist_title_exact"
         ));
     }
 
@@ -90,13 +95,15 @@ class HermesAgentEventExtractorTest {
         var extractor = new HermesAgentEventExtractor();
 
         assertThat(extractor.accept("event: xiaozhi.agent_event\r\ndata: {\"action\":\"create_reminder\","
-                + "\"message\":\"喝水\",\"delay_seconds\":60,\"confirmation_text\":\"1分钟后提醒你喝水\"}\r\n\r")).isEmpty();
+                + "\"message\":\"喝水\",\"delay_seconds\":60,\"confirmation_text\":\"好的，一分钟后提醒你喝水。\","
+                + "\"due_text\":\"该喝水了，别忘了。\"}\r\n\r")).isEmpty();
 
         assertThat(extractor.accept("\n")).containsExactly(new HermesAgentEvent(
                 "create_reminder",
                 "喝水",
                 60L,
-                "1分钟后提醒你喝水",
+                "好的，一分钟后提醒你喝水。",
+                "该喝水了，别忘了。",
                 null,
                 null,
                 null,

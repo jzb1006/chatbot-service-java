@@ -27,6 +27,7 @@ import org.springframework.stereotype.Service;
 public class XiaozhiReminderService {
 
     private static final int MAX_DELIVERY_ATTEMPTS = 4;
+    private static final int MAX_DUE_TEXT_LENGTH = 80;
     private static final long RETRY_DELAY_MILLIS = 5_000L;
 
     private final XiaozhiVoiceSessionService sessionService;
@@ -53,19 +54,26 @@ public class XiaozhiReminderService {
      * 创建提醒任务。
      *
      * @param deviceId 设备 ID
-     * @param message 提醒内容
+     * @param message 结构化提醒内容
+     * @param dueText Hermes 生成的到点播报文本
      * @param remindAt ISO-8601 到期时间
      * @return 已创建提醒
      */
-    public CreatedReminder create(String deviceId, String message, String remindAt) {
+    public CreatedReminder create(String deviceId, String message, String dueText, String remindAt) {
         if (deviceId == null || deviceId.isBlank()) {
             throw new IllegalArgumentException("deviceId is required");
         }
         if (message == null || message.isBlank()) {
             throw new IllegalArgumentException("message is required");
         }
+        if (dueText == null || dueText.isBlank()) {
+            throw new IllegalArgumentException("dueText is required");
+        }
+        if (dueText.length() > MAX_DUE_TEXT_LENGTH) {
+            throw new IllegalArgumentException("dueText must not exceed " + MAX_DUE_TEXT_LENGTH + " characters");
+        }
         var triggerAt = parseRemindAt(remindAt);
-        var reminder = new CreatedReminder(UUID.randomUUID().toString(), deviceId, message, triggerAt);
+        var reminder = new CreatedReminder(UUID.randomUUID().toString(), deviceId, message, dueText, triggerAt);
         reminders.put(reminder.id(), reminder);
         scheduler.schedule(
                 () -> fire(reminder, 1),
@@ -79,15 +87,16 @@ public class XiaozhiReminderService {
      * 创建延迟提醒任务。
      *
      * @param deviceId 设备 ID
-     * @param message 提醒内容
+     * @param message 结构化提醒内容
+     * @param dueText Hermes 生成的到点播报文本
      * @param delaySeconds 延迟秒数
      * @return 已创建提醒
      */
-    public CreatedReminder createAfter(String deviceId, String message, long delaySeconds) {
+    public CreatedReminder createAfter(String deviceId, String message, String dueText, long delaySeconds) {
         if (delaySeconds < 0) {
             throw new IllegalArgumentException("delaySeconds must not be negative");
         }
-        return create(deviceId, message, Instant.now().plusSeconds(delaySeconds).toString());
+        return create(deviceId, message, dueText, Instant.now().plusSeconds(delaySeconds).toString());
     }
 
     /**
@@ -97,11 +106,11 @@ public class XiaozhiReminderService {
      */
     @EventListener
     public void handleReminderRequested(XiaozhiReminderRequestedEvent event) {
-        createAfter(event.deviceId(), event.message(), event.delaySeconds());
+        createAfter(event.deviceId(), event.message(), event.dueText(), event.delaySeconds());
     }
 
     private void fire(CreatedReminder reminder, int attempt) {
-        var notified = sessionService.notifyDevice(reminder.deviceId(), reminder.message());
+        var notified = sessionService.notifyDevice(reminder.deviceId(), reminder.dueText());
         if (notified) {
             reminders.remove(reminder.id());
             log.info("xiaozhi reminder delivered, reminderId={}, deviceId={}, message={}, attempt={}",
@@ -155,9 +164,10 @@ public class XiaozhiReminderService {
      *
      * @param id 提醒 ID
      * @param deviceId 设备 ID
-     * @param message 提醒内容
+     * @param message 结构化提醒内容
+     * @param dueText Hermes 生成的到点播报文本
      * @param remindAt 到期时间
      */
-    public record CreatedReminder(String id, String deviceId, String message, Instant remindAt) {
+    public record CreatedReminder(String id, String deviceId, String message, String dueText, Instant remindAt) {
     }
 }

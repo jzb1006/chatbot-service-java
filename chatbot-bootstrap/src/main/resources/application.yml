@@ -57,6 +57,10 @@ chatbot:
       connect-timeout: ${CHATBOT_VOICE_MUSIC_CONNECT_TIMEOUT:3s}
       max-duration: ${CHATBOT_VOICE_MUSIC_MAX_DURATION:5m}
       allowed-hosts: ${CHATBOT_VOICE_MUSIC_ALLOWED_HOSTS:}
+      sample-rate: ${CHATBOT_VOICE_MUSIC_SAMPLE_RATE:16000}
+      frame-duration-ms: ${CHATBOT_VOICE_MUSIC_FRAME_DURATION_MS:60}
+      bitrate-bps: ${CHATBOT_VOICE_MUSIC_BITRATE_BPS:64000}
+      complexity: ${CHATBOT_VOICE_MUSIC_COMPLEXITY:10}
     asr:
       mode: ${CHATBOT_VOICE_ASR_MODE:sentence}
       provider: ${CHATBOT_VOICE_ASR_PROVIDER:fake}

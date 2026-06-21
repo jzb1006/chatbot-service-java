@@ -49,7 +49,7 @@ const tools = [
   {
     name: "create_reminder",
     description:
-      "创建一次性小智提醒。用户说“1分钟后提醒我喝水”“下午三点叫我开会”时必须调用本工具。到点后设备会主动播报 message。",
+      "创建一次性小智提醒。用户说“1分钟后提醒我喝水”“下午三点叫我开会”时必须调用本工具。Hermes 负责生成设置成功回复 confirmationText 和到点播报 dueText，Java 只负责按时播报 dueText。",
     inputSchema: {
       type: "object",
       properties: {
@@ -59,7 +59,15 @@ const tools = [
         },
         message: {
           type: "string",
-          description: "到点后需要播报的提醒内容，不要包含时间前缀。例如“喝水”。",
+          description: "结构化提醒内容，不要包含时间前缀。例如“喝水”“出门”。",
+        },
+        confirmationText: {
+          type: "string",
+          description: "设置成功后要直接回复给用户的短句，由 Hermes 自由生成。例如“好的，我记下了，一分钟后提醒你出门。”。",
+        },
+        dueText: {
+          type: "string",
+          description: "到点后设备要播报的短句，由 Hermes 自由生成。必须覆盖提醒核心内容，例如“该出门了，别忘了带好东西。”。",
         },
         remindAt: {
           type: "string",
@@ -71,7 +79,7 @@ const tools = [
           description: "从当前时间开始延迟的秒数。例如一分钟后传 60。",
         },
       },
-      required: ["message"],
+      required: ["message", "confirmationText", "dueText"],
       additionalProperties: false,
     },
   },
@@ -227,7 +235,9 @@ async function setVolume(args = {}) {
 
 async function createReminder(args = {}) {
   const message = requiredText(args.message, "message");
-  const payload = { message };
+  const confirmationText = requiredText(args.confirmationText, "confirmationText");
+  const dueText = requiredText(args.dueText, "dueText");
+  const payload = { message, dueText };
   if (typeof args.deviceId === "string" && args.deviceId.trim()) {
     payload.deviceId = args.deviceId.trim();
   }
@@ -242,7 +252,7 @@ async function createReminder(args = {}) {
   const reminder = await callGatewayTool("xiaozhi_create_reminder", payload);
   return {
     ...reminder,
-    confirmation_text: buildReminderConfirmation(reminder, payload),
+    confirmation_text: confirmationText,
   };
 }
 
@@ -363,17 +373,6 @@ function requiredText(value, field) {
     throw new Error(`${field} 是必填项`);
   }
   return value.trim();
-}
-
-function buildReminderConfirmation(reminder, payload) {
-  if (Number.isInteger(payload.delaySeconds)) {
-    const minutes = Math.round(payload.delaySeconds / 60);
-    if (payload.delaySeconds > 0 && payload.delaySeconds % 60 === 0) {
-      return `${minutes} 分钟后提醒你${reminder.message}`;
-    }
-    return `${payload.delaySeconds} 秒后提醒你${reminder.message}`;
-  }
-  return `已设置提醒：${reminder.message}`;
 }
 
 function errorResponse(id, code, message) {
