@@ -76,6 +76,12 @@ chatbot:
       default-speed: ${CHATBOT_VOICE_TTS_DEFAULT_SPEED:1.0}
       default-pitch: ${CHATBOT_VOICE_TTS_DEFAULT_PITCH:1.0}
       provider: ${CHATBOT_VOICE_TTS_PROVIDER:tencent}
+      edge:
+        voice: ${CHATBOT_VOICE_TTS_EDGE_VOICE:zh-CN-XiaoxiaoNeural}
+        output-format: ${CHATBOT_VOICE_TTS_EDGE_OUTPUT_FORMAT:audio-24khz-48kbitrate-mono-mp3}
+        sample-rate: ${CHATBOT_VOICE_TTS_EDGE_SAMPLE_RATE:16000}
+        ffmpeg-path: ${CHATBOT_VOICE_TTS_EDGE_FFMPEG_PATH:ffmpeg}
+        timeout-seconds: ${CHATBOT_VOICE_TTS_EDGE_TIMEOUT_SECONDS:15}
       tencent:
         app-id: ${TENCENT_CLOUD_APP_ID:}
         secret-id: ${TENCENT_CLOUD_SECRET_ID:}

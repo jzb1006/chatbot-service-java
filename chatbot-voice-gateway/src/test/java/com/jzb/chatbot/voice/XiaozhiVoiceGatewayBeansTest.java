@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.common.id.VoiceId;
 import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.speech.DisabledStreamingTextToSpeechClient;
+import com.jzb.chatbot.speech.EdgeTextToSpeechClient;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeStreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeTextToSpeechClient;
@@ -257,6 +258,19 @@ class XiaozhiVoiceGatewayBeansTest {
                     var client = context.getBean(TextToSpeechClient.class);
 
                     assertThat(client).isInstanceOf(TencentCloudTextToSpeechClient.class);
+                });
+    }
+
+    @Test
+    void shouldUseEdgeTextToSpeechWhenConfigured() {
+        contextRunner
+                .withPropertyValues("chatbot.voice.tts.provider=edge")
+                .run(context -> {
+                    var client = context.getBean(TextToSpeechClient.class);
+                    var streamingClient = context.getBean(StreamingTextToSpeechClient.class);
+
+                    assertThat(client).isInstanceOf(EdgeTextToSpeechClient.class);
+                    assertThat(streamingClient).isInstanceOf(DisabledStreamingTextToSpeechClient.class);
                 });
     }
 
