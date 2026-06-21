@@ -1,0 +1,12 @@
+{
+  "name": "xiaozhi-device-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Hermes to control XiaoZhi device capabilities via chatbot-service-java.",
+  "type": "module",
+  "bin": {
+    "xiaozhi-device-mcp": "src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
