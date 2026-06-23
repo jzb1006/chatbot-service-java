@@ -18,6 +18,7 @@ import com.jzb.chatbot.voice.music.XiaozhiMusicActionHandler;
 import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackRuntime;
 import com.jzb.chatbot.voice.music.XiaozhiMusicPlaybackState;
 import com.jzb.chatbot.voice.protocol.XiaozhiAudioParams;
+import com.jzb.chatbot.voice.protocol.XiaozhiAudioFrame;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientHello;
 import com.jzb.chatbot.voice.protocol.XiaozhiClientMessage;
 import com.jzb.chatbot.voice.protocol.XiaozhiMessageCodec;
@@ -486,8 +487,8 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         }
         cancelCurrentTurnPlayback(voiceSession);
         if (asrMode.streaming()) {
-            autoListenEndpoints.remove(webSocketSession.getId());
             var asrTurn = voiceSession.startAsrStream(audioParams.sampleRate(), message.mode());
+            startAutoListenEndpointIfNeeded(webSocketSession, message, voiceSession);
             Thread.startVirtualThread(() -> processStreamingTurn(webSocketSession, voiceSession, asrTurn));
         } else {
             voiceSession.markListening();
@@ -506,6 +507,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             handleBargeInStop(webSocketSession, voiceSession);
             return;
         }
+        autoListenEndpoints.remove(webSocketSession.getId());
         if (asrMode.streaming()) {
             if (voiceSession.completeAsrStream() == null) {
                 voiceSession.markIdle();
@@ -514,7 +516,6 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             }
             return;
         }
-        autoListenEndpoints.remove(webSocketSession.getId());
         var processingAudio = voiceSession.tryDrainAudioFramesForProcessing();
         if (!processingAudio.accepted()) {
             log.debug("ignore xiaozhi listen stop outside listening, sessionId={}, deviceId={}, state={}",
@@ -663,6 +664,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         if (voiceSession.state() == XiaozhiVoiceSession.State.LISTENING) {
             if (asrMode.streaming()) {
                 voiceSession.writeAudioFrameToAsr(frame);
+                handleAutoListenEndpoint(webSocketSession, voiceSession, frame);
             } else {
                 if (voiceSession.addAudioFrameIfListening(frame)) {
                     handleAutoListenEndpoint(webSocketSession, voiceSession, frame);
@@ -707,7 +709,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     private void handleAutoListenEndpoint(
             WebSocketSession webSocketSession,
             XiaozhiVoiceSession voiceSession,
-            com.jzb.chatbot.voice.protocol.XiaozhiAudioFrame frame
+            XiaozhiAudioFrame frame
     ) {
         var endpoint = autoListenEndpoints.get(webSocketSession.getId());
         if (endpoint == null) {
@@ -716,6 +718,15 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         var result = endpoint.accept(frame);
         if (result != XiaozhiAutoListenEndpoint.Result.END_OF_UTTERANCE
                 || !autoListenEndpoints.remove(webSocketSession.getId(), endpoint)) {
+            return;
+        }
+        if (asrMode.streaming()) {
+            if (voiceSession.completeAsrStream() == null) {
+                return;
+            }
+            voiceSession.markProcessing();
+            log.info("xiaozhi auto-stop detected streaming utterance end, sessionId={}, deviceId={}",
+                    webSocketSession.getId(), voiceSession.deviceId());
             return;
         }
         var processingAudio = voiceSession.tryDrainAudioFramesForProcessing();

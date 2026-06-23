@@ -168,6 +168,40 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldAutoCompleteStreamingAsrWhenAutoListenSpeechEndsWithSilence() {
+        var streamingSpeech = new RecordingStreamingSpeechToTextClient("streaming ping", "streaming-provider");
+        var serviceWithStreamingAsr = newService(
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        serviceWithStreamingAsr.setAutoStopProperties(new XiaozhiAutoStopProperties(
+                true,
+                Duration.ofMillis(120),
+                Duration.ofMillis(900),
+                0.01
+        ));
+        var session = openSession(serviceWithStreamingAsr);
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        for (var frame : speechThenSilenceOpusFrames()) {
+            serviceWithStreamingAsr.handleBinary(session, frame);
+        }
+
+        assertThat(streamingSpeech.callCount()).isEqualTo(1);
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"stt\"", "\"text\":\"streaming ping\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\""));
+    }
+
+    @Test
     void shouldClearSpeakingStateWhenAbortReceived() {
         var session = openSession();
         service.getSession(session.getId()).markSpeaking();
