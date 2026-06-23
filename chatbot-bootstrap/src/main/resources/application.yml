@@ -40,6 +40,11 @@ chatbot:
       sample-rate: ${CHATBOT_VOICE_AUDIO_SAMPLE_RATE:16000}
       channels: ${CHATBOT_VOICE_AUDIO_CHANNELS:1}
       frame-duration: ${CHATBOT_VOICE_AUDIO_FRAME_DURATION:60}
+    auto-stop:
+      enabled: ${CHATBOT_VOICE_AUTO_STOP_ENABLED:true}
+      min-speech-duration: ${CHATBOT_VOICE_AUTO_STOP_MIN_SPEECH_DURATION:180ms}
+      silence-duration: ${CHATBOT_VOICE_AUTO_STOP_SILENCE_DURATION:900ms}
+      speech-rms-threshold: ${CHATBOT_VOICE_AUTO_STOP_SPEECH_RMS_THRESHOLD:0.01}
     barge-in:
       enabled: ${CHATBOT_VOICE_BARGE_IN_ENABLED:false}
       min-text-length: ${CHATBOT_VOICE_BARGE_IN_MIN_TEXT_LENGTH:2}

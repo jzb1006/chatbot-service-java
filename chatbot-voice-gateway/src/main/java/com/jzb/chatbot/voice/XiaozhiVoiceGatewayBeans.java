@@ -129,6 +129,17 @@ public class XiaozhiVoiceGatewayBeans {
     }
 
     @Bean
+    XiaozhiAutoStopProperties xiaozhiAutoStopProperties(Environment environment) {
+        var binder = Binder.get(environment);
+        return new XiaozhiAutoStopProperties(
+                binder.bind("chatbot.voice.auto-stop.enabled", Boolean.class).orElse(true),
+                binder.bind("chatbot.voice.auto-stop.min-speech-duration", Duration.class).orElse(Duration.ofMillis(180)),
+                binder.bind("chatbot.voice.auto-stop.silence-duration", Duration.class).orElse(Duration.ofMillis(900)),
+                binder.bind("chatbot.voice.auto-stop.speech-rms-threshold", Double.class).orElse(0.01)
+        );
+    }
+
+    @Bean
     XiaozhiSessionEndProperties xiaozhiSessionEndProperties(Environment environment) {
         var binder = Binder.get(environment);
         return new XiaozhiSessionEndProperties(

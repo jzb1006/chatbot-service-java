@@ -19,6 +19,7 @@ import com.jzb.chatbot.speech.FakeTextToSpeechClient;
 import com.jzb.chatbot.speech.SpeechToTextAudioStream;
 import com.jzb.chatbot.speech.SpeechToTextClient;
 import com.jzb.chatbot.speech.SpeechToTextResult;
+import com.jzb.chatbot.speech.StreamingPcmToOpusEncoder;
 import com.jzb.chatbot.speech.StreamingSpeechToTextClient;
 import com.jzb.chatbot.speech.StreamingTextToSpeechClient;
 import com.jzb.chatbot.speech.StreamingTextToSpeechListener;
@@ -45,6 +46,7 @@ import com.jzb.chatbot.voice.tts.XiaozhiTtsRuntime;
 import com.jzb.chatbot.voice.tts.XiaozhiVoiceProfileResolver;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -135,6 +137,34 @@ class XiaozhiVoiceSessionServiceTest {
                 .extracting(message -> message.getPayload().toString())
                 .noneSatisfy(payload -> assertThat(payload)
                         .contains("\"type\":\"tts\"", "\"state\":\"sentence_start\""));
+    }
+
+    @Test
+    void shouldAutoProcessWhenAutoListenSpeechEndsWithSilence() {
+        var speechToTextClient = new CountingSpeechToTextClient("ping");
+        var serviceWithCountingAsr = newService(speechToTextClient, new FakeHermesClient(), new FakeTextToSpeechClient());
+        serviceWithCountingAsr.setAutoStopProperties(new XiaozhiAutoStopProperties(
+                true,
+                Duration.ofMillis(120),
+                Duration.ofMillis(900),
+                0.01
+        ));
+        var session = openSession(serviceWithCountingAsr);
+        serviceWithCountingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        for (var frame : speechThenSilenceOpusFrames()) {
+            serviceWithCountingAsr.handleBinary(session, frame);
+        }
+
+        assertThat(speechToTextClient.calls()).isEqualTo(1);
+        assertThat(serviceWithCountingAsr.getSession(session.getId()).state()).isEqualTo(XiaozhiVoiceSession.State.IDLE);
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"stt\"", "\"text\":\"ping\""))
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\""));
     }
 
     @Test
@@ -2813,6 +2843,32 @@ class XiaozhiVoiceSessionServiceTest {
         service.handleText(session, new XiaozhiClientMessage(
                 "listen", "stop", null, null, null, "ws-session-1", null
         ));
+    }
+
+    private List<ByteBuffer> speechThenSilenceOpusFrames() {
+        var encoder = new StreamingPcmToOpusEncoder(16000, 60);
+        var frames = new ArrayList<ByteBuffer>();
+        for (var index = 0; index < 3; index++) {
+            frames.addAll(encoder.accept(tonePcmFrame(index)));
+        }
+        for (var index = 0; index < 20; index++) {
+            frames.addAll(encoder.accept(silencePcmFrame()));
+        }
+        frames.addAll(encoder.flush());
+        return frames.stream().map(ByteBuffer::slice).toList();
+    }
+
+    private byte[] tonePcmFrame(int frameIndex) {
+        var pcm = ByteBuffer.allocate(960 * Short.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+        for (var index = 0; index < 960; index++) {
+            var sampleIndex = frameIndex * 960 + index;
+            pcm.putShort((short) (12000 * Math.sin(2 * Math.PI * 440 * sampleIndex / 16000)));
+        }
+        return pcm.array();
+    }
+
+    private byte[] silencePcmFrame() {
+        return new byte[960 * Short.BYTES];
     }
 
     private boolean awaitIdle(XiaozhiVoiceSessionService service, TestWebSocketSession session) {

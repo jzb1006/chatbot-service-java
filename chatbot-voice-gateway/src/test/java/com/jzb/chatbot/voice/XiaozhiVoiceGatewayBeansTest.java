@@ -119,6 +119,39 @@ class XiaozhiVoiceGatewayBeansTest {
     }
 
     @Test
+    void shouldCreateAutoStopPropertiesWithDefaults() {
+        contextRunner.run(context -> {
+            assertThat(context).hasSingleBean(XiaozhiAutoStopProperties.class);
+
+            var properties = context.getBean(XiaozhiAutoStopProperties.class);
+
+            assertThat(properties.enabled()).isTrue();
+            assertThat(properties.minSpeechDuration()).isEqualTo(Duration.ofMillis(180));
+            assertThat(properties.silenceDuration()).isEqualTo(Duration.ofMillis(900));
+            assertThat(properties.speechRmsThreshold()).isEqualTo(0.01);
+        });
+    }
+
+    @Test
+    void shouldCreateConfiguredAutoStopProperties() {
+        contextRunner
+                .withPropertyValues(
+                        "chatbot.voice.auto-stop.enabled=false",
+                        "chatbot.voice.auto-stop.min-speech-duration=240ms",
+                        "chatbot.voice.auto-stop.silence-duration=1200ms",
+                        "chatbot.voice.auto-stop.speech-rms-threshold=0.02"
+                )
+                .run(context -> {
+                    var properties = context.getBean(XiaozhiAutoStopProperties.class);
+
+                    assertThat(properties.enabled()).isFalse();
+                    assertThat(properties.minSpeechDuration()).isEqualTo(Duration.ofMillis(240));
+                    assertThat(properties.silenceDuration()).isEqualTo(Duration.ofMillis(1200));
+                    assertThat(properties.speechRmsThreshold()).isEqualTo(0.02);
+                });
+    }
+
+    @Test
     void shouldCreateSessionEndPropertiesWithDefaultDisabled() {
         contextRunner.run(context -> {
             assertThat(context).hasSingleBean(XiaozhiSessionEndProperties.class);
