@@ -690,16 +690,59 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         if (!autoStopProperties.enabled() || !isAutoListenMode(message.mode())) {
             return;
         }
-        autoListenEndpoints.put(
-                webSocketSession.getId(),
-                new XiaozhiAutoListenEndpoint(audioParams.sampleRate(), audioParams.frameDuration(), autoStopProperties)
-        );
-        log.info("xiaozhi auto-stop armed, sessionId={}, deviceId={}, minSpeechMillis={}, silenceMillis={}, rmsThreshold={}",
+        var endpoint = new XiaozhiAutoListenEndpoint(audioParams.sampleRate(), audioParams.frameDuration(), autoStopProperties);
+        autoListenEndpoints.put(webSocketSession.getId(), endpoint);
+        Thread.startVirtualThread(() -> completeAutoListenOnNoSpeechTimeout(webSocketSession, voiceSession, endpoint));
+        Thread.startVirtualThread(() -> completeAutoListenOnMaxDuration(webSocketSession, voiceSession, endpoint));
+        log.info("xiaozhi auto-stop armed, sessionId={}, deviceId={}, minSpeechMillis={}, silenceMillis={}, noSpeechTimeoutMillis={}, maxDurationMillis={}, rmsThreshold={}",
                 webSocketSession.getId(),
                 voiceSession.deviceId(),
                 autoStopProperties.minSpeechDuration().toMillis(),
                 autoStopProperties.silenceDuration().toMillis(),
+                autoStopProperties.noSpeechTimeout().toMillis(),
+                autoStopProperties.maxDuration().toMillis(),
                 autoStopProperties.speechRmsThreshold());
+    }
+
+    private void completeAutoListenOnNoSpeechTimeout(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiAutoListenEndpoint endpoint
+    ) {
+        try {
+            Thread.sleep(endpoint.noSpeechTimeoutMillis());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        if (endpoint.speechStarted()) {
+            return;
+        }
+        completeAutoListenEndpoint(
+                webSocketSession,
+                voiceSession,
+                endpoint,
+                XiaozhiAutoListenEndpoint.Result.NO_SPEECH_TIMEOUT
+        );
+    }
+
+    private void completeAutoListenOnMaxDuration(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiAutoListenEndpoint endpoint
+    ) {
+        try {
+            Thread.sleep(endpoint.maxDurationMillis());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        completeAutoListenEndpoint(
+                webSocketSession,
+                voiceSession,
+                endpoint,
+                XiaozhiAutoListenEndpoint.Result.MAX_DURATION_REACHED
+        );
     }
 
     private boolean isAutoListenMode(String mode) {
@@ -716,26 +759,58 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             return;
         }
         var result = endpoint.accept(frame);
-        if (result != XiaozhiAutoListenEndpoint.Result.END_OF_UTTERANCE
-                || !autoListenEndpoints.remove(webSocketSession.getId(), endpoint)) {
+        if (result == XiaozhiAutoListenEndpoint.Result.CONTINUE) {
+            return;
+        }
+        completeAutoListenEndpoint(webSocketSession, voiceSession, endpoint, result);
+    }
+
+    private void completeAutoListenEndpoint(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiAutoListenEndpoint endpoint,
+            XiaozhiAutoListenEndpoint.Result result
+    ) {
+        if (!autoListenEndpoints.remove(webSocketSession.getId(), endpoint)) {
             return;
         }
         if (asrMode.streaming()) {
-            if (voiceSession.completeAsrStream() == null) {
-                return;
-            }
-            voiceSession.markProcessing();
-            log.info("xiaozhi auto-stop detected streaming utterance end, sessionId={}, deviceId={}",
-                    webSocketSession.getId(), voiceSession.deviceId());
+            handleStreamingAutoListenEndpointResult(webSocketSession, voiceSession, endpoint, result);
             return;
         }
         var processingAudio = voiceSession.tryDrainAudioFramesForProcessing();
         if (!processingAudio.accepted()) {
             return;
         }
-        log.info("xiaozhi auto-stop detected utterance end, sessionId={}, deviceId={}, audioFrames={}",
-                webSocketSession.getId(), voiceSession.deviceId(), processingAudio.frames().size());
+        log.info("xiaozhi auto-stop detected utterance end, sessionId={}, deviceId={}, audioFrames={}, reason={}, frames={}, audioMillis={}, peakRms={}",
+                webSocketSession.getId(),
+                voiceSession.deviceId(),
+                processingAudio.frames().size(),
+                result,
+                endpoint.frameCount(),
+                endpoint.totalMillis(),
+                endpoint.peakRms());
         processSentenceTurn(webSocketSession, voiceSession, processingAudio);
+    }
+
+    private void handleStreamingAutoListenEndpointResult(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiAutoListenEndpoint endpoint,
+            XiaozhiAutoListenEndpoint.Result result
+    ) {
+        if (voiceSession.completeAsrStream() == null) {
+            return;
+        }
+        voiceSession.markProcessing();
+        log.info("xiaozhi auto-stop detected streaming utterance end, sessionId={}, deviceId={}, reason={}, frames={}, audioMillis={}, peakRms={}, speechStarted={}",
+                webSocketSession.getId(),
+                voiceSession.deviceId(),
+                result,
+                endpoint.frameCount(),
+                endpoint.totalMillis(),
+                endpoint.peakRms(),
+                endpoint.speechStarted());
     }
 
     /**

@@ -12,16 +12,23 @@ final class XiaozhiAutoListenEndpoint {
 
     enum Result {
         CONTINUE,
-        END_OF_UTTERANCE
+        END_OF_UTTERANCE,
+        NO_SPEECH_TIMEOUT,
+        MAX_DURATION_REACHED
     }
 
     private final StreamingOpusToPcmDecoder decoder;
     private final long frameDurationMillis;
     private final long minSpeechMillis;
     private final long silenceMillis;
+    private final long noSpeechTimeoutMillis;
+    private final long maxDurationMillis;
     private final double speechRmsThreshold;
+    private long totalMillis;
+    private long frameCount;
     private long candidateSpeechMillis;
     private long silenceAfterSpeechMillis;
+    private double peakRms;
     private boolean speechStarted;
 
     XiaozhiAutoListenEndpoint(
@@ -33,10 +40,12 @@ final class XiaozhiAutoListenEndpoint {
         this.frameDurationMillis = Math.max(1, frameDurationMillis);
         this.minSpeechMillis = properties.minSpeechDuration().toMillis();
         this.silenceMillis = properties.silenceDuration().toMillis();
+        this.noSpeechTimeoutMillis = properties.noSpeechTimeout().toMillis();
+        this.maxDurationMillis = properties.maxDuration().toMillis();
         this.speechRmsThreshold = properties.speechRmsThreshold();
     }
 
-    Result accept(XiaozhiAudioFrame frame) {
+    synchronized Result accept(XiaozhiAudioFrame frame) {
         if (frame == null || frame.payload() == null || frame.payload().length == 0) {
             return Result.CONTINUE;
         }
@@ -44,7 +53,14 @@ final class XiaozhiAutoListenEndpoint {
         if (pcm.length == 0) {
             return Result.CONTINUE;
         }
-        if (rms(pcm) >= speechRmsThreshold) {
+        frameCount++;
+        totalMillis += frameDurationMillis;
+        var frameRms = rms(pcm);
+        peakRms = Math.max(peakRms, frameRms);
+        if (totalMillis >= maxDurationMillis) {
+            return Result.MAX_DURATION_REACHED;
+        }
+        if (frameRms >= speechRmsThreshold) {
             candidateSpeechMillis += frameDurationMillis;
             silenceAfterSpeechMillis = 0;
             if (candidateSpeechMillis >= minSpeechMillis) {
@@ -54,10 +70,34 @@ final class XiaozhiAutoListenEndpoint {
         }
         if (!speechStarted) {
             candidateSpeechMillis = 0;
-            return Result.CONTINUE;
+            return totalMillis >= noSpeechTimeoutMillis ? Result.NO_SPEECH_TIMEOUT : Result.CONTINUE;
         }
         silenceAfterSpeechMillis += frameDurationMillis;
         return silenceAfterSpeechMillis >= silenceMillis ? Result.END_OF_UTTERANCE : Result.CONTINUE;
+    }
+
+    synchronized long frameCount() {
+        return frameCount;
+    }
+
+    synchronized long totalMillis() {
+        return totalMillis;
+    }
+
+    synchronized double peakRms() {
+        return peakRms;
+    }
+
+    synchronized boolean speechStarted() {
+        return speechStarted;
+    }
+
+    synchronized long noSpeechTimeoutMillis() {
+        return noSpeechTimeoutMillis;
+    }
+
+    synchronized long maxDurationMillis() {
+        return maxDurationMillis;
     }
 
     private double rms(byte[] pcm) {

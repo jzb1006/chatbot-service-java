@@ -202,6 +202,39 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldCompleteStreamingAutoListenWhenNoAudioFramesArrive() {
+        var streamingSpeech = new RecordingStreamingSpeechToTextClient(" ", "streaming-provider");
+        var serviceWithStreamingAsr = newService(
+                new FakeSpeechToTextClient(),
+                new FakeHermesClient(),
+                new FakeTextToSpeechClient(),
+                new XiaozhiAsrMode("streaming"),
+                streamingSpeech
+        );
+        serviceWithStreamingAsr.setAutoStopProperties(new XiaozhiAutoStopProperties(
+                true,
+                Duration.ofMillis(120),
+                Duration.ofMillis(900),
+                0.01,
+                Duration.ofMillis(60),
+                Duration.ofMillis(500)
+        ));
+        var session = openSession(serviceWithStreamingAsr);
+
+        serviceWithStreamingAsr.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(streamingSpeech.callCount()).isEqualTo(1);
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""))
+                .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\""));
+    }
+
+    @Test
     void shouldClearSpeakingStateWhenAbortReceived() {
         var session = openSession();
         service.getSession(session.getId()).markSpeaking();

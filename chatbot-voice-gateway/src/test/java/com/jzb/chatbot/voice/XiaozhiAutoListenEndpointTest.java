@@ -27,6 +27,53 @@ class XiaozhiAutoListenEndpointTest {
         assertThat(results).contains(XiaozhiAutoListenEndpoint.Result.END_OF_UTTERANCE);
     }
 
+    @Test
+    void shouldDetectNoSpeechTimeoutWhenOnlySilenceArrives() {
+        var endpoint = new XiaozhiAutoListenEndpoint(
+                16000,
+                60,
+                new XiaozhiAutoStopProperties(
+                        true,
+                        Duration.ofMillis(120),
+                        Duration.ofMillis(900),
+                        0.01,
+                        Duration.ofMillis(180),
+                        Duration.ofSeconds(1)
+                )
+        );
+
+        var results = silenceOpusFrames(5).stream()
+                .map(frame -> endpoint.accept(new XiaozhiAudioFrame(1, 0, toBytes(frame))))
+                .toList();
+
+        assertThat(results).contains(XiaozhiAutoListenEndpoint.Result.NO_SPEECH_TIMEOUT);
+        assertThat(endpoint.frameCount()).isGreaterThanOrEqualTo(3);
+        assertThat(endpoint.speechStarted()).isFalse();
+    }
+
+    @Test
+    void shouldDetectMaxDurationEvenAfterSpeechStarts() {
+        var endpoint = new XiaozhiAutoListenEndpoint(
+                16000,
+                60,
+                new XiaozhiAutoStopProperties(
+                        true,
+                        Duration.ofMillis(120),
+                        Duration.ofSeconds(10),
+                        0.01,
+                        Duration.ofMillis(60),
+                        Duration.ofMillis(240)
+                )
+        );
+
+        var results = speechOpusFrames(6).stream()
+                .map(frame -> endpoint.accept(new XiaozhiAudioFrame(1, 0, toBytes(frame))))
+                .toList();
+
+        assertThat(results).contains(XiaozhiAutoListenEndpoint.Result.MAX_DURATION_REACHED);
+        assertThat(endpoint.speechStarted()).isTrue();
+    }
+
     private List<ByteBuffer> speechThenSilenceOpusFrames() {
         var encoder = new StreamingPcmToOpusEncoder(16000, 60);
         var frames = new ArrayList<ByteBuffer>();
@@ -34,6 +81,26 @@ class XiaozhiAutoListenEndpointTest {
             frames.addAll(encoder.accept(tonePcmFrame(index)));
         }
         for (var index = 0; index < 20; index++) {
+            frames.addAll(encoder.accept(silencePcmFrame()));
+        }
+        frames.addAll(encoder.flush());
+        return frames.stream().map(ByteBuffer::slice).toList();
+    }
+
+    private List<ByteBuffer> speechOpusFrames(int count) {
+        var encoder = new StreamingPcmToOpusEncoder(16000, 60);
+        var frames = new ArrayList<ByteBuffer>();
+        for (var index = 0; index < count; index++) {
+            frames.addAll(encoder.accept(tonePcmFrame(index)));
+        }
+        frames.addAll(encoder.flush());
+        return frames.stream().map(ByteBuffer::slice).toList();
+    }
+
+    private List<ByteBuffer> silenceOpusFrames(int count) {
+        var encoder = new StreamingPcmToOpusEncoder(16000, 60);
+        var frames = new ArrayList<ByteBuffer>();
+        for (var index = 0; index < count; index++) {
             frames.addAll(encoder.accept(silencePcmFrame()));
         }
         frames.addAll(encoder.flush());

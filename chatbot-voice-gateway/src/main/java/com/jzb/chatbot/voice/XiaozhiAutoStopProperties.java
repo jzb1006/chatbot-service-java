@@ -9,12 +9,35 @@ public record XiaozhiAutoStopProperties(
         boolean enabled,
         Duration minSpeechDuration,
         Duration silenceDuration,
-        double speechRmsThreshold
+        double speechRmsThreshold,
+        Duration noSpeechTimeout,
+        Duration maxDuration
 ) {
+
+    public XiaozhiAutoStopProperties(
+            boolean enabled,
+            Duration minSpeechDuration,
+            Duration silenceDuration,
+            double speechRmsThreshold
+    ) {
+        this(
+                enabled,
+                minSpeechDuration,
+                silenceDuration,
+                speechRmsThreshold,
+                Duration.ofSeconds(8),
+                Duration.ofSeconds(60)
+        );
+    }
 
     public XiaozhiAutoStopProperties {
         minSpeechDuration = normalize(minSpeechDuration, Duration.ofMillis(180));
         silenceDuration = normalize(silenceDuration, Duration.ofMillis(900));
+        noSpeechTimeout = normalize(noSpeechTimeout, Duration.ofSeconds(8));
+        maxDuration = normalize(maxDuration, Duration.ofSeconds(60));
+        if (maxDuration.compareTo(noSpeechTimeout) < 0) {
+            maxDuration = noSpeechTimeout;
+        }
         if (speechRmsThreshold <= 0 || Double.isNaN(speechRmsThreshold) || Double.isInfinite(speechRmsThreshold)) {
             speechRmsThreshold = 0.01;
         }
@@ -25,7 +48,9 @@ public record XiaozhiAutoStopProperties(
                 true,
                 Duration.ofMillis(180),
                 Duration.ofMillis(900),
-                0.01
+                0.01,
+                Duration.ofSeconds(8),
+                Duration.ofSeconds(60)
         );
     }
 

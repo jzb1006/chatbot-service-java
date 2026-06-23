@@ -129,6 +129,8 @@ class XiaozhiVoiceGatewayBeansTest {
             assertThat(properties.minSpeechDuration()).isEqualTo(Duration.ofMillis(180));
             assertThat(properties.silenceDuration()).isEqualTo(Duration.ofMillis(900));
             assertThat(properties.speechRmsThreshold()).isEqualTo(0.01);
+            assertThat(properties.noSpeechTimeout()).isEqualTo(Duration.ofSeconds(8));
+            assertThat(properties.maxDuration()).isEqualTo(Duration.ofSeconds(60));
         });
     }
 
@@ -139,7 +141,9 @@ class XiaozhiVoiceGatewayBeansTest {
                         "chatbot.voice.auto-stop.enabled=false",
                         "chatbot.voice.auto-stop.min-speech-duration=240ms",
                         "chatbot.voice.auto-stop.silence-duration=1200ms",
-                        "chatbot.voice.auto-stop.speech-rms-threshold=0.02"
+                        "chatbot.voice.auto-stop.speech-rms-threshold=0.02",
+                        "chatbot.voice.auto-stop.no-speech-timeout=5s",
+                        "chatbot.voice.auto-stop.max-duration=45s"
                 )
                 .run(context -> {
                     var properties = context.getBean(XiaozhiAutoStopProperties.class);
@@ -148,6 +152,8 @@ class XiaozhiVoiceGatewayBeansTest {
                     assertThat(properties.minSpeechDuration()).isEqualTo(Duration.ofMillis(240));
                     assertThat(properties.silenceDuration()).isEqualTo(Duration.ofMillis(1200));
                     assertThat(properties.speechRmsThreshold()).isEqualTo(0.02);
+                    assertThat(properties.noSpeechTimeout()).isEqualTo(Duration.ofSeconds(5));
+                    assertThat(properties.maxDuration()).isEqualTo(Duration.ofSeconds(45));
                 });
     }
 
