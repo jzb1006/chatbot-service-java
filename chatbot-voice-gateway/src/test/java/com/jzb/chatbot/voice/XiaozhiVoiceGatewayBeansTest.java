@@ -129,8 +129,8 @@ class XiaozhiVoiceGatewayBeansTest {
             assertThat(properties.minSpeechDuration()).isEqualTo(Duration.ofMillis(180));
             assertThat(properties.silenceDuration()).isEqualTo(Duration.ofMillis(900));
             assertThat(properties.speechRmsThreshold()).isEqualTo(0.01);
-            assertThat(properties.noSpeechTimeout()).isEqualTo(Duration.ofSeconds(8));
-            assertThat(properties.maxDuration()).isEqualTo(Duration.ofSeconds(60));
+            assertThat(properties.noSpeechTimeout()).isEqualTo(Duration.ofSeconds(6));
+            assertThat(properties.maxDuration()).isEqualTo(Duration.ofSeconds(15));
         });
     }
 

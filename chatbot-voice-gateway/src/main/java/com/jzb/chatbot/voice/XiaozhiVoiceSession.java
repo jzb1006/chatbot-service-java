@@ -131,6 +131,10 @@ public class XiaozhiVoiceSession {
     }
 
     public synchronized AsrTurn startAsrStream(int sampleRate, String listenMode) {
+        return startAsrStream(sampleRate, listenMode, false);
+    }
+
+    public synchronized AsrTurn startAsrStream(int sampleRate, String listenMode, boolean resumeControlMusicOnBlank) {
         cancelPlaybackLocked();
         terminateAsrStreamLocked();
         clearBargeInTurnLocked();
@@ -142,6 +146,7 @@ public class XiaozhiVoiceSession {
                 deviceId(),
                 conversationId(),
                 blankToDefault(listenMode, "auto"),
+                resumeControlMusicOnBlank,
                 new SpeechToTextAudioStream(),
                 new StreamingOpusToPcmDecoder(sampleRate)
         );
@@ -628,6 +633,7 @@ public class XiaozhiVoiceSession {
             String deviceId,
             String conversationId,
             String listenMode,
+            boolean resumeControlMusicOnBlank,
             SpeechToTextAudioStream audioStream,
             StreamingOpusToPcmDecoder opusDecoder
     ) {

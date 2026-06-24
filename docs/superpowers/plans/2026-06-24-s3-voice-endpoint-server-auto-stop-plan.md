@@ -112,7 +112,7 @@ CHATBOT_VOICE_AUTO_STOP_MAX_DURATION=15s
 - 读取：`chatbot-voice-gateway/src/main/java/com/jzb/chatbot/voice/XiaozhiAutoListenEndpoint.java`
 - 读取：`chatbot-voice-gateway/src/main/java/com/jzb/chatbot/voice/XiaozhiVoiceSessionService.java`
 
-- [ ] **步骤 1：确认当前默认参数**
+- [x] **步骤 1：确认当前默认参数**
 
 运行：
 
@@ -128,7 +128,7 @@ max-duration: ${CHATBOT_VOICE_AUTO_STOP_MAX_DURATION:60s}
 Duration.ofSeconds(60)
 ```
 
-- [ ] **步骤 2：确认 endpoint detector 判断顺序**
+- [x] **步骤 2：确认 endpoint detector 判断顺序**
 
 运行：
 
@@ -145,7 +145,7 @@ frameRms >= speechRmsThreshold -> candidateSpeechMillis
 silenceAfterSpeechMillis >= silenceMillis -> END_OF_UTTERANCE
 ```
 
-- [ ] **步骤 3：确认日志字段足够支撑实机判断**
+- [x] **步骤 3：确认日志字段足够支撑实机判断**
 
 运行：
 
@@ -177,7 +177,7 @@ assistantText
 - 修改：`chatbot-voice-gateway/src/test/java/com/jzb/chatbot/voice/XiaozhiAutoListenEndpointTest.java`
 - 修改：`chatbot-voice-gateway/src/test/java/com/jzb/chatbot/voice/XiaozhiVoiceGatewayBeansTest.java`
 
-- [ ] **步骤 1：补短命令结束测试**
+- [x] **步骤 1：补短命令结束测试**
 
 在 `XiaozhiAutoListenEndpointTest` 增加或核对等价用例：
 
@@ -206,7 +206,7 @@ void shouldEndUtteranceAfterSpeechAndTrailingSilence() {
 }
 ```
 
-- [ ] **步骤 2：补空唤醒测试**
+- [x] **步骤 2：补空唤醒测试**
 
 在 `XiaozhiAutoListenEndpointTest` 增加或核对等价用例：
 
@@ -233,7 +233,7 @@ void shouldReturnNoSpeechTimeoutWhenNoSpeechDetected() {
 }
 ```
 
-- [ ] **步骤 3：补最大时长兜底测试**
+- [x] **步骤 3：补最大时长兜底测试**
 
 在 `XiaozhiAutoListenEndpointTest` 增加或核对等价用例：
 
@@ -260,7 +260,7 @@ void shouldUseMaxDurationOnlyAsFallback() {
 }
 ```
 
-- [ ] **步骤 4：运行 endpoint 单测**
+- [x] **步骤 4：运行 endpoint 单测**
 
 运行：
 
@@ -281,7 +281,7 @@ BUILD SUCCESS
 - 修改：`chatbot-voice-gateway/src/main/java/com/jzb/chatbot/voice/XiaozhiAutoStopProperties.java`
 - 修改：`chatbot-voice-gateway/src/test/java/com/jzb/chatbot/voice/XiaozhiVoiceGatewayBeansTest.java`
 
-- [ ] **步骤 1：修改 `application.yml` 默认值**
+- [x] **步骤 1：修改 `application.yml` 默认值**
 
 把：
 
@@ -297,7 +297,7 @@ no-speech-timeout: ${CHATBOT_VOICE_AUTO_STOP_NO_SPEECH_TIMEOUT:6s}
 max-duration: ${CHATBOT_VOICE_AUTO_STOP_MAX_DURATION:15s}
 ```
 
-- [ ] **步骤 2：修改 `XiaozhiAutoStopProperties` 默认值**
+- [x] **步骤 2：修改 `XiaozhiAutoStopProperties` 默认值**
 
 把构造器 fallback 和 `defaults()` 中的：
 
@@ -313,7 +313,7 @@ Duration.ofSeconds(6),
 Duration.ofSeconds(15)
 ```
 
-- [ ] **步骤 3：更新配置绑定测试**
+- [x] **步骤 3：更新配置绑定测试**
 
 在 `XiaozhiVoiceGatewayBeansTest` 中保留显式覆盖配置的测试，新增或核对默认配置测试：
 
@@ -335,7 +335,7 @@ void shouldBindDefaultAutoStopProperties() {
 }
 ```
 
-- [ ] **步骤 4：运行配置绑定测试**
+- [x] **步骤 4：运行配置绑定测试**
 
 运行：
 
@@ -355,7 +355,7 @@ BUILD SUCCESS
 - 修改：`deploy/chatbot-service.env.example`
 - 修改：`docs/superpowers/plans/2026-06-24-s3-voice-endpoint-server-auto-stop-plan.md`
 
-- [ ] **步骤 1：在 env example 中补齐 auto-stop 参数**
+- [x] **步骤 1：在 env example 中补齐 auto-stop 参数**
 
 在 `deploy/chatbot-service.env.example` 增加或核对：
 
@@ -368,7 +368,7 @@ CHATBOT_VOICE_AUTO_STOP_NO_SPEECH_TIMEOUT=6s
 CHATBOT_VOICE_AUTO_STOP_MAX_DURATION=15s
 ```
 
-- [ ] **步骤 2：远程运行态变更必须改 env-file 并重建容器**
+- [x] **步骤 2：远程运行态变更必须改 env-file 并重建容器**
 
 远程 `device_gateway` 当前稳定运行态依赖：
 

@@ -24,11 +24,16 @@ final class XiaozhiAutoListenEndpoint {
     private final long noSpeechTimeoutMillis;
     private final long maxDurationMillis;
     private final double speechRmsThreshold;
+    private final double[] trailingRms = new double[20];
     private long totalMillis;
     private long frameCount;
     private long candidateSpeechMillis;
     private long silenceAfterSpeechMillis;
+    private long aboveThresholdFrames;
+    private long belowThresholdFrames;
     private double peakRms;
+    private double minRms = Double.POSITIVE_INFINITY;
+    private double lastRms;
     private boolean speechStarted;
 
     XiaozhiAutoListenEndpoint(
@@ -56,11 +61,15 @@ final class XiaozhiAutoListenEndpoint {
         frameCount++;
         totalMillis += frameDurationMillis;
         var frameRms = rms(pcm);
+        lastRms = frameRms;
         peakRms = Math.max(peakRms, frameRms);
+        minRms = Math.min(minRms, frameRms);
+        trailingRms[(int) ((frameCount - 1) % trailingRms.length)] = frameRms;
         if (totalMillis >= maxDurationMillis) {
             return Result.MAX_DURATION_REACHED;
         }
         if (frameRms >= speechRmsThreshold) {
+            aboveThresholdFrames++;
             candidateSpeechMillis += frameDurationMillis;
             silenceAfterSpeechMillis = 0;
             if (candidateSpeechMillis >= minSpeechMillis) {
@@ -68,6 +77,7 @@ final class XiaozhiAutoListenEndpoint {
             }
             return Result.CONTINUE;
         }
+        belowThresholdFrames++;
         if (!speechStarted) {
             candidateSpeechMillis = 0;
             return totalMillis >= noSpeechTimeoutMillis ? Result.NO_SPEECH_TIMEOUT : Result.CONTINUE;
@@ -88,6 +98,34 @@ final class XiaozhiAutoListenEndpoint {
         return peakRms;
     }
 
+    synchronized double minRms() {
+        return minRms == Double.POSITIVE_INFINITY ? 0.0 : minRms;
+    }
+
+    synchronized double lastRms() {
+        return lastRms;
+    }
+
+    synchronized double trailingMinRms() {
+        return trailingRmsStats().min();
+    }
+
+    synchronized double trailingAvgRms() {
+        return trailingRmsStats().avg();
+    }
+
+    synchronized long aboveThresholdFrames() {
+        return aboveThresholdFrames;
+    }
+
+    synchronized long belowThresholdFrames() {
+        return belowThresholdFrames;
+    }
+
+    synchronized long silenceAfterSpeechMillis() {
+        return silenceAfterSpeechMillis;
+    }
+
     synchronized boolean speechStarted() {
         return speechStarted;
     }
@@ -98,6 +136,21 @@ final class XiaozhiAutoListenEndpoint {
 
     synchronized long maxDurationMillis() {
         return maxDurationMillis;
+    }
+
+    private RmsStats trailingRmsStats() {
+        var sampleCount = Math.min(frameCount, trailingRms.length);
+        if (sampleCount == 0) {
+            return new RmsStats(0.0, 0.0);
+        }
+        var sum = 0.0;
+        var min = Double.POSITIVE_INFINITY;
+        for (var index = 0; index < sampleCount; index++) {
+            var value = trailingRms[index];
+            sum += value;
+            min = Math.min(min, value);
+        }
+        return new RmsStats(min, sum / sampleCount);
     }
 
     private double rms(byte[] pcm) {
@@ -113,5 +166,8 @@ final class XiaozhiAutoListenEndpoint {
             return 0.0;
         }
         return Math.sqrt(sumSquares / sampleCount) / Short.MAX_VALUE;
+    }
+
+    private record RmsStats(double min, double avg) {
     }
 }

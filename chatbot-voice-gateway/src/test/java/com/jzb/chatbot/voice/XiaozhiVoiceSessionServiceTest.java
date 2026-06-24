@@ -226,11 +226,15 @@ class XiaozhiVoiceSessionServiceTest {
         ));
 
         assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(awaitClosed(session)).isTrue();
+        assertThat(session.getCloseStatus()).isNotNull();
+        assertThat(session.getCloseStatus().getCode()).isEqualTo(1000);
+        assertThat(session.getCloseStatus().getReason()).isEqualTo("auto_listen_no_speech");
         assertThat(streamingSpeech.callCount()).isEqualTo(1);
         assertThat(session.getSentMessages())
                 .filteredOn(TextMessage.class::isInstance)
                 .extracting(message -> message.getPayload().toString())
-                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""))
+                .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""))
                 .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\""));
     }
 
@@ -506,7 +510,7 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
-    void shouldReturnIdleWithoutPromptWhenAutoStreamingAsrTextIsBlank() {
+    void shouldCloseWebSocketWithoutPromptWhenAutoStreamingAsrTextIsBlank() {
         var streamingSpeech = new ImmediateStreamingSpeechToTextClient(" ", "streaming-provider");
         var serviceWithStreamingAsr = newService(
                 new RecordingSpeechToTextClient(),
@@ -522,10 +526,14 @@ class XiaozhiVoiceSessionServiceTest {
         ));
 
         assertThat(awaitIdle(serviceWithStreamingAsr, session)).isTrue();
+        assertThat(awaitClosed(session)).isTrue();
+        assertThat(session.getCloseStatus()).isNotNull();
+        assertThat(session.getCloseStatus().getCode()).isEqualTo(1000);
+        assertThat(session.getCloseStatus().getReason()).isEqualTo("auto_listen_no_speech");
         assertThat(session.getSentMessages())
                 .filteredOn(TextMessage.class::isInstance)
                 .extracting(message -> message.getPayload().toString())
-                .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""))
+                .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""))
                 .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\""));
         assertThat(session.getSentMessages())
                 .noneSatisfy(message -> assertThat(message).isInstanceOf(BinaryMessage.class));
@@ -1022,6 +1030,39 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldCloseWebSocketWhenAutoMusicStopHasNoOutput() {
+        var streamingSpeech = new ImmediateStreamingSpeechToTextClient("停止", "streaming-provider");
+        var musicRuntime = new CapturingMusicPlaybackRuntime();
+        musicRuntime.markPlaying("晴天");
+        var serviceWithMusic = newServiceWithBargeInControlIntent(
+                new StaticSseHermesClient("""
+                        event: xiaozhi.agent_event
+                        data: {"action":"music_stop"}
+
+                        """),
+                streamingSpeech,
+                new FakeTextToSpeechClient(),
+                musicRuntime,
+                false
+        );
+        var session = openSession(serviceWithMusic);
+
+        serviceWithMusic.handleText(session, new XiaozhiClientMessage(
+                "listen", "start", "auto", null, null, "ws-session-1", null
+        ));
+        serviceWithMusic.handleText(session, new XiaozhiClientMessage(
+                "listen", "stop", "auto", null, null, "ws-session-1", null
+        ));
+
+        assertThat(awaitClosed(session)).isTrue();
+        assertThat(session.getCloseStatus()).isNotNull();
+        assertThat(session.getCloseStatus().getCode()).isEqualTo(1000);
+        assertThat(session.getCloseStatus().getReason()).isEqualTo("auto_listen_no_output");
+        assertThat(musicRuntime.events()).contains("pause:ws-session-1:CONTROL", "stop:ws-session-1");
+        assertThat(streamingSpeech.callCount()).isEqualTo(1);
+    }
+
+    @Test
     void shouldResumeControlPausedMusicWhenAutoListenIsBlank() {
         var streamingSpeech = new ImmediateStreamingSpeechToTextClient(" ", "streaming-provider");
         var musicRuntime = new CapturingMusicPlaybackRuntime();
@@ -1047,6 +1088,11 @@ class XiaozhiVoiceSessionServiceTest {
                 "pause:ws-session-1:CONTROL",
                 "resume:ws-session-1:CONTROL"
         );
+        assertThat(session.isOpen()).isTrue();
+        assertThat(session.getSentMessages())
+                .filteredOn(TextMessage.class::isInstance)
+                .extracting(message -> message.getPayload().toString())
+                .noneSatisfy(payload -> assertThat(payload).contains("\"type\":\"error\"", "\"code\":\"asr_empty\""));
         assertThat(streamingSpeech.callCount()).isEqualTo(1);
     }
 

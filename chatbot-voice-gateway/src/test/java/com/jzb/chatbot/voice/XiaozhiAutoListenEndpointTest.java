@@ -18,13 +18,25 @@ class XiaozhiAutoListenEndpointTest {
         var endpoint = new XiaozhiAutoListenEndpoint(
                 16000,
                 60,
-                new XiaozhiAutoStopProperties(true, Duration.ofMillis(120), Duration.ofMillis(900), 0.01)
+                new XiaozhiAutoStopProperties(
+                        true,
+                        Duration.ofMillis(180),
+                        Duration.ofMillis(900),
+                        0.01,
+                        Duration.ofSeconds(6),
+                        Duration.ofSeconds(15)
+                )
         );
         var results = speechThenSilenceOpusFrames().stream()
                 .map(frame -> endpoint.accept(new XiaozhiAudioFrame(1, 0, toBytes(frame))))
                 .toList();
 
         assertThat(results).contains(XiaozhiAutoListenEndpoint.Result.END_OF_UTTERANCE);
+        assertThat(results).doesNotContain(XiaozhiAutoListenEndpoint.Result.MAX_DURATION_REACHED);
+        assertThat(endpoint.peakRms()).isGreaterThan(0.01);
+        assertThat(endpoint.trailingMinRms()).isLessThan(0.001);
+        assertThat(endpoint.trailingAvgRms()).isLessThan(0.01);
+        assertThat(endpoint.silenceAfterSpeechMillis()).isGreaterThanOrEqualTo(900);
     }
 
     @Test
@@ -49,6 +61,10 @@ class XiaozhiAutoListenEndpointTest {
         assertThat(results).contains(XiaozhiAutoListenEndpoint.Result.NO_SPEECH_TIMEOUT);
         assertThat(endpoint.frameCount()).isGreaterThanOrEqualTo(3);
         assertThat(endpoint.speechStarted()).isFalse();
+        assertThat(endpoint.minRms()).isLessThan(0.001);
+        assertThat(endpoint.lastRms()).isLessThan(0.001);
+        assertThat(endpoint.belowThresholdFrames()).isEqualTo(endpoint.frameCount());
+        assertThat(endpoint.aboveThresholdFrames()).isZero();
     }
 
     @Test
@@ -72,6 +88,8 @@ class XiaozhiAutoListenEndpointTest {
 
         assertThat(results).contains(XiaozhiAutoListenEndpoint.Result.MAX_DURATION_REACHED);
         assertThat(endpoint.speechStarted()).isTrue();
+        assertThat(endpoint.aboveThresholdFrames()).isGreaterThan(0);
+        assertThat(endpoint.trailingAvgRms()).isGreaterThan(0.01);
     }
 
     private List<ByteBuffer> speechThenSilenceOpusFrames() {

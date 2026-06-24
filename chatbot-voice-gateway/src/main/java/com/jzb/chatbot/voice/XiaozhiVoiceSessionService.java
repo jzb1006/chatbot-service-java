@@ -68,6 +68,9 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     private static final String PROTOCOL_VERSION_HEADER = "Protocol-Version";
     private static final String DEVICE_ID_HEADER = "Device-Id";
     private static final String CLIENT_ID_HEADER = "Client-Id";
+    private static final int NORMAL_CLOSE_STATUS_CODE = 1000;
+    private static final String AUTO_LISTEN_NO_SPEECH_CLOSE_REASON = "auto_listen_no_speech";
+    private static final String AUTO_LISTEN_NO_OUTPUT_CLOSE_REASON = "auto_listen_no_output";
     private static final String SENTENCE_ASR_PROVIDER = "sentence";
     private static final String ASR_FAILED_PROMPT = "语音识别失败，请再试一次";
     private static final String HERMES_FAILED_PROMPT = "对话服务暂时不可用，请稍后再试";
@@ -480,14 +483,19 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             handleBargeInStart(webSocketSession, voiceSession);
             return;
         }
-        if (musicActive(voiceSession)) {
+        var resumeControlMusicOnBlank = musicActive(voiceSession);
+        if (resumeControlMusicOnBlank) {
             pauseMusicForControl(voiceSession);
         } else {
             stopMusic(voiceSession);
         }
         cancelCurrentTurnPlayback(voiceSession);
         if (asrMode.streaming()) {
-            var asrTurn = voiceSession.startAsrStream(audioParams.sampleRate(), message.mode());
+            var asrTurn = voiceSession.startAsrStream(
+                    audioParams.sampleRate(),
+                    message.mode(),
+                    resumeControlMusicOnBlank
+            );
             startAutoListenEndpointIfNeeded(webSocketSession, message, voiceSession);
             Thread.startVirtualThread(() -> processStreamingTurn(webSocketSession, voiceSession, asrTurn));
         } else {
@@ -566,6 +574,25 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             log.info("xiaozhi barge-in timed out, sessionId={}, deviceId={}, playbackGeneration={}",
                     voiceSession.sessionId(), voiceSession.deviceId(), turn.playbackGeneration());
         }
+    }
+
+    private void handleBlankAutoStreamingAsr(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiVoiceSession.AsrTurn asrTurn
+    ) {
+        autoListenEndpoints.remove(webSocketSession.getId());
+        if (asrTurn.resumeControlMusicOnBlank()) {
+            resumeControlMusic(voiceSession);
+        }
+        voiceSession.markIdleIfAsrTurn(asrTurn);
+        if (!asrTurn.resumeControlMusicOnBlank()) {
+            closeWebSocket(webSocketSession, NORMAL_CLOSE_STATUS_CODE, AUTO_LISTEN_NO_SPEECH_CLOSE_REASON);
+        }
+    }
+
+    private boolean autoListenMode(String listenMode) {
+        return listenMode == null || listenMode.isBlank() || "auto".equalsIgnoreCase(listenMode);
     }
 
     private void processBargeInTurn(
@@ -782,14 +809,21 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         if (!processingAudio.accepted()) {
             return;
         }
-        log.info("xiaozhi auto-stop detected utterance end, sessionId={}, deviceId={}, audioFrames={}, reason={}, frames={}, audioMillis={}, peakRms={}",
+        log.info("xiaozhi auto-stop detected utterance end, sessionId={}, deviceId={}, audioFrames={}, reason={}, frames={}, audioMillis={}, peakRms={}, minRms={}, lastRms={}, trailingMinRms={}, trailingAvgRms={}, aboveThresholdFrames={}, belowThresholdFrames={}, silenceAfterSpeechMillis={}",
                 webSocketSession.getId(),
                 voiceSession.deviceId(),
                 processingAudio.frames().size(),
                 result,
                 endpoint.frameCount(),
                 endpoint.totalMillis(),
-                endpoint.peakRms());
+                endpoint.peakRms(),
+                endpoint.minRms(),
+                endpoint.lastRms(),
+                endpoint.trailingMinRms(),
+                endpoint.trailingAvgRms(),
+                endpoint.aboveThresholdFrames(),
+                endpoint.belowThresholdFrames(),
+                endpoint.silenceAfterSpeechMillis());
         processSentenceTurn(webSocketSession, voiceSession, processingAudio);
     }
 
@@ -803,13 +837,20 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             return;
         }
         voiceSession.markProcessing();
-        log.info("xiaozhi auto-stop detected streaming utterance end, sessionId={}, deviceId={}, reason={}, frames={}, audioMillis={}, peakRms={}, speechStarted={}",
+        log.info("xiaozhi auto-stop detected streaming utterance end, sessionId={}, deviceId={}, reason={}, frames={}, audioMillis={}, peakRms={}, minRms={}, lastRms={}, trailingMinRms={}, trailingAvgRms={}, aboveThresholdFrames={}, belowThresholdFrames={}, silenceAfterSpeechMillis={}, speechStarted={}",
                 webSocketSession.getId(),
                 voiceSession.deviceId(),
                 result,
                 endpoint.frameCount(),
                 endpoint.totalMillis(),
                 endpoint.peakRms(),
+                endpoint.minRms(),
+                endpoint.lastRms(),
+                endpoint.trailingMinRms(),
+                endpoint.trailingAvgRms(),
+                endpoint.aboveThresholdFrames(),
+                endpoint.belowThresholdFrames(),
+                endpoint.silenceAfterSpeechMillis(),
                 endpoint.speechStarted());
     }
 
@@ -990,17 +1031,16 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                         voiceSession.deviceId(),
                         provider(result),
                         asrMillis);
+                if (autoListenMode(asrTurn.listenMode())) {
+                    handleBlankAutoStreamingAsr(webSocketSession, voiceSession, asrTurn);
+                    return;
+                }
                 if (!trySendAsrTurnText(
                         webSocketSession,
                         voiceSession,
                         asrTurn,
                         eventFactory.error(voiceSession.sessionId(), "asr_empty", "未识别到语音")
                 )) {
-                    return;
-                }
-                if ("auto".equals(asrTurn.listenMode())) {
-                    resumeControlMusic(voiceSession);
-                    voiceSession.markIdleIfAsrTurn(asrTurn);
                     return;
                 }
                 sendRecoverableTurnTts(
@@ -1038,6 +1078,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             if (!turnResult.completed()) {
                 return;
             }
+            closeAutoListenWithoutOutputIfNeeded(webSocketSession, voiceSession, asrTurn, turnResult);
             log.info("xiaozhi streaming conversation turn, sessionId={}, deviceId={}, conversationId={}, asrProvider={}, asrMillis={}, userText={}, assistantText={}",
                     webSocketSession.getId(),
                     voiceSession.deviceId(),
@@ -1076,6 +1117,18 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         } finally {
             voiceSession.clearAsrStream(asrTurn);
         }
+    }
+
+    private void closeAutoListenWithoutOutputIfNeeded(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiVoiceSession.AsrTurn asrTurn,
+            TurnResult turnResult
+    ) {
+        if (!autoListenMode(asrTurn.listenMode()) || turnResult.playedTts() || musicActive(voiceSession)) {
+            return;
+        }
+        closeWebSocket(webSocketSession, NORMAL_CLOSE_STATUS_CODE, AUTO_LISTEN_NO_OUTPUT_CLOSE_REASON);
     }
 
     private Transcription transcribe(
@@ -1252,7 +1305,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             if (playbackResult.cancelled()) {
                 return TurnResult.cancelled(reply.toString());
             }
-            return TurnResult.completed(reply.toString());
+            return TurnResult.completed(reply.toString(), playbackResult);
         } catch (XiaozhiSessionEndRequestedException exception) {
             return TurnResult.cancelled(reply.toString());
         } catch (RuntimeException exception) {
@@ -1340,7 +1393,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         if (playbackResult.cancelled()) {
             return TurnResult.cancelled(reply.toString());
         }
-        return TurnResult.completed(reply.toString());
+        return TurnResult.completed(reply.toString(), playbackResult);
     }
 
     private void streamHermesIntoSentenceSink(
@@ -1626,16 +1679,21 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     }
 
     private void closeWebSocket(WebSocketSession webSocketSession) {
+        closeWebSocket(
+                webSocketSession,
+                sessionEndProperties.closeStatusCode(),
+                sessionEndProperties.closeReason()
+        );
+    }
+
+    private void closeWebSocket(WebSocketSession webSocketSession, int statusCode, String reason) {
         try {
             if (webSocketSession.isOpen()) {
-                webSocketSession.close(new CloseStatus(
-                        sessionEndProperties.closeStatusCode(),
-                        sessionEndProperties.closeReason()
-                ));
+                webSocketSession.close(new CloseStatus(statusCode, reason));
             }
         } catch (IOException exception) {
-            log.warn("xiaozhi websocket session-end close failed, sessionId={}, message={}",
-                    webSocketSession.getId(), exception.getMessage(), exception);
+            log.warn("xiaozhi websocket close failed, sessionId={}, reason={}, message={}",
+                    webSocketSession.getId(), reason, exception.getMessage(), exception);
         }
     }
 
@@ -2196,7 +2254,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         }
     }
 
-    private record TurnResult(String reply, Status status) {
+    private record TurnResult(String reply, Status status, PlaybackResult playbackResult) {
 
         private enum Status {
             COMPLETED,
@@ -2204,16 +2262,16 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             FAILED
         }
 
-        private static TurnResult completed(String reply) {
-            return new TurnResult(reply, Status.COMPLETED);
+        private static TurnResult completed(String reply, PlaybackResult playbackResult) {
+            return new TurnResult(reply, Status.COMPLETED, playbackResult);
         }
 
         private static TurnResult cancelled(String reply) {
-            return new TurnResult(reply, Status.CANCELLED);
+            return new TurnResult(reply, Status.CANCELLED, null);
         }
 
         private static TurnResult failure() {
-            return new TurnResult("", Status.FAILED);
+            return new TurnResult("", Status.FAILED, null);
         }
 
         private boolean completed() {
@@ -2222,6 +2280,12 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
 
         private boolean failed() {
             return status == Status.FAILED;
+        }
+
+        private boolean playedTts() {
+            return playbackResult != null
+                    && playbackResult.ttsResult() != null
+                    && playbackResult.ttsResult().played();
         }
     }
 }
