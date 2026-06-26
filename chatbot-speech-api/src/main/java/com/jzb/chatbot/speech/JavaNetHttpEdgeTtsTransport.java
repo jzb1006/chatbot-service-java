@@ -49,23 +49,8 @@ final class JavaNetHttpEdgeTtsTransport implements EdgeTtsTransport {
 
     @Override
     public byte[] synthesize(EdgeTtsRequest request, Duration timeout) {
-        var listener = new EdgeWebSocketListener();
-        var webSocket = httpClient.newWebSocketBuilder()
-                .header("Pragma", "no-cache")
-                .header("Cache-Control", "no-cache")
-                .header("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold")
-                .header("User-Agent", userAgent())
-                .header("Accept-Language", "en-US,en;q=0.9")
-                .header("Cookie", "muid=" + UUID.randomUUID().toString().replace("-", "").toUpperCase() + ";")
-                .connectTimeout(timeout)
-                .buildAsync(edgeUri(), listener)
-                .join();
-        webSocket.sendText(speechConfig(request.outputFormat()), true).join();
-        webSocket.sendText(ssmlMessage(request), true).join();
-        if (!listener.await(timeout)) {
-            webSocket.abort();
-            throw new IllegalStateException("Edge TTS timed out");
-        }
+        var listener = new CollectingEdgeStreamingListener();
+        stream(request, timeout, listener);
         var failure = listener.failure();
         if (failure != null) {
             throw new IllegalStateException("Edge TTS failed", failure);
@@ -75,6 +60,41 @@ final class JavaNetHttpEdgeTtsTransport implements EdgeTtsTransport {
             throw new IllegalStateException("Edge TTS returned no audio");
         }
         return audio;
+    }
+
+    @Override
+    public void stream(EdgeTtsRequest request, Duration timeout, StreamingListener listener) {
+        var failure = streamOnce(request, timeout, listener);
+        if (failure != null) {
+            listener.onFailed(new IllegalStateException("Edge TTS failed", failure));
+            return;
+        }
+        listener.onCompleted();
+    }
+
+    private Throwable streamOnce(EdgeTtsRequest request, Duration timeout, StreamingListener listener) {
+        var webSocketListener = new EdgeWebSocketListener(listener);
+        try {
+            var webSocket = httpClient.newWebSocketBuilder()
+                    .header("Pragma", "no-cache")
+                    .header("Cache-Control", "no-cache")
+                    .header("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold")
+                    .header("User-Agent", userAgent())
+                    .header("Accept-Language", "en-US,en;q=0.9")
+                    .header("Cookie", "muid=" + UUID.randomUUID().toString().replace("-", "").toUpperCase() + ";")
+                    .connectTimeout(timeout)
+                    .buildAsync(edgeUri(), webSocketListener)
+                    .join();
+            webSocket.sendText(speechConfig(request.outputFormat()), true).join();
+            webSocket.sendText(ssmlMessage(request), true).join();
+            if (!webSocketListener.await(timeout)) {
+                webSocket.abort();
+                return new IllegalStateException("Edge TTS timed out");
+            }
+            return webSocketListener.failure();
+        } catch (RuntimeException exception) {
+            return exception;
+        }
     }
 
     private URI edgeUri() {
@@ -104,8 +124,7 @@ final class JavaNetHttpEdgeTtsTransport implements EdgeTtsTransport {
 
     private String ssml(EdgeTtsRequest request) {
         var voice = xmlEscape(request.voice());
-        return "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
-                + "xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='zh-CN'>"
+        return "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>"
                 + "<voice name='" + voice + "'>"
                 + "<prosody pitch='" + xmlEscape(request.pitch()) + "' rate='" + xmlEscape(request.rate()) + "'>"
                 + xmlEscape(cleanText(request.text()))
@@ -170,13 +189,45 @@ final class JavaNetHttpEdgeTtsTransport implements EdgeTtsTransport {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
+    private static final class CollectingEdgeStreamingListener implements StreamingListener {
+
+        private final ByteArrayOutputStream audio = new ByteArrayOutputStream();
+        private final AtomicReference<RuntimeException> failure = new AtomicReference<>();
+
+        @Override
+        public void onAudio(byte[] audio) {
+            this.audio.writeBytes(audio);
+        }
+
+        @Override
+        public void onCompleted() {
+        }
+
+        @Override
+        public void onFailed(RuntimeException exception) {
+            failure.compareAndSet(null, exception);
+        }
+
+        private RuntimeException failure() {
+            return failure.get();
+        }
+
+        private byte[] audio() {
+            return audio.toByteArray();
+        }
+    }
+
     private static final class EdgeWebSocketListener implements WebSocket.Listener {
 
         private final CountDownLatch done = new CountDownLatch(1);
-        private final ByteArrayOutputStream audio = new ByteArrayOutputStream();
+        private final StreamingListener listener;
         private final AtomicReference<Throwable> failure = new AtomicReference<>();
         private ByteArrayOutputStream binaryBuffer = new ByteArrayOutputStream();
         private StringBuilder textBuffer = new StringBuilder();
+
+        private EdgeWebSocketListener(StreamingListener listener) {
+            this.listener = listener;
+        }
 
         @Override
         public void onOpen(WebSocket webSocket) {
@@ -207,7 +258,7 @@ final class JavaNetHttpEdgeTtsTransport implements EdgeTtsTransport {
                 binaryBuffer = new ByteArrayOutputStream();
                 var payload = audioPayload(message);
                 if (payload.length > 0) {
-                    audio.writeBytes(payload);
+                    listener.onAudio(payload);
                 }
             }
             webSocket.request(1);
@@ -243,10 +294,6 @@ final class JavaNetHttpEdgeTtsTransport implements EdgeTtsTransport {
 
         private Throwable failure() {
             return failure.get();
-        }
-
-        private byte[] audio() {
-            return audio.toByteArray();
         }
 
         private byte[] audioPayload(byte[] message) {

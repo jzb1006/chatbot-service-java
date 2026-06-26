@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.common.id.VoiceId;
 import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.speech.DisabledStreamingTextToSpeechClient;
+import com.jzb.chatbot.speech.EdgeStreamingTextToSpeechClient;
 import com.jzb.chatbot.speech.EdgeTextToSpeechClient;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
 import com.jzb.chatbot.speech.FakeStreamingSpeechToTextClient;
@@ -324,7 +325,7 @@ class XiaozhiVoiceGatewayBeansTest {
                     var streamingClient = context.getBean(StreamingTextToSpeechClient.class);
 
                     assertThat(client).isInstanceOf(EdgeTextToSpeechClient.class);
-                    assertThat(streamingClient).isInstanceOf(DisabledStreamingTextToSpeechClient.class);
+                    assertThat(streamingClient).isInstanceOf(EdgeStreamingTextToSpeechClient.class);
                 });
     }
 

@@ -22,6 +22,27 @@ public interface EdgeTtsTransport {
      */
     byte[] synthesize(EdgeTtsRequest request, Duration timeout);
 
+    default void stream(EdgeTtsRequest request, Duration timeout, StreamingListener listener) {
+        try {
+            var audio = synthesize(request, timeout);
+            if (audio.length > 0) {
+                listener.onAudio(audio);
+            }
+            listener.onCompleted();
+        } catch (RuntimeException exception) {
+            listener.onFailed(exception);
+        }
+    }
+
+    interface StreamingListener {
+
+        void onAudio(byte[] audio);
+
+        void onCompleted();
+
+        void onFailed(RuntimeException exception);
+    }
+
     /**
      * 创建 JDK HTTP 客户端实现。
      *

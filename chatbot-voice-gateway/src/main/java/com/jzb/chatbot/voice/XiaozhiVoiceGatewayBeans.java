@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jzb.chatbot.common.id.VoiceId;
 import com.jzb.chatbot.hermes.HermesClientConfig;
 import com.jzb.chatbot.speech.DisabledStreamingTextToSpeechClient;
+import com.jzb.chatbot.speech.EdgeStreamingTextToSpeechClient;
 import com.jzb.chatbot.speech.EdgeTextToSpeechClient;
 import com.jzb.chatbot.speech.EdgeTextToSpeechConfig;
 import com.jzb.chatbot.speech.FakeSpeechToTextClient;
@@ -283,8 +284,22 @@ public class XiaozhiVoiceGatewayBeans {
             @Value("${chatbot.voice.tts.tencent.sample-rate:16000}") int sampleRate,
             @Value("${chatbot.voice.tts.default-speed:1.0}") double defaultSpeed,
             @Value("${chatbot.voice.tts.tencent.volume:0.0}") double volume,
-            @Value("${chatbot.voice.tts.tencent.stream-timeout-seconds:30}") int timeoutSeconds
+            @Value("${chatbot.voice.tts.tencent.stream-timeout-seconds:30}") int timeoutSeconds,
+            @Value("${chatbot.voice.tts.edge.voice:zh-CN-XiaoxiaoNeural}") String edgeVoice,
+            @Value("${chatbot.voice.tts.edge.output-format:audio-24khz-48kbitrate-mono-mp3}") String edgeOutputFormat,
+            @Value("${chatbot.voice.tts.edge.sample-rate:16000}") int edgeSampleRate,
+            @Value("${chatbot.voice.tts.edge.ffmpeg-path:ffmpeg}") String edgeFfmpegPath,
+            @Value("${chatbot.voice.tts.edge.timeout-seconds:15}") int edgeTimeoutSeconds
     ) {
+        if ("edge".equalsIgnoreCase(provider)) {
+            return new EdgeStreamingTextToSpeechClient(new EdgeTextToSpeechConfig(
+                    edgeVoice,
+                    edgeOutputFormat,
+                    edgeSampleRate,
+                    edgeFfmpegPath,
+                    Duration.ofSeconds(edgeTimeoutSeconds)
+            ));
+        }
         if (!"tencent-streaming".equalsIgnoreCase(provider)) {
             return new DisabledStreamingTextToSpeechClient();
         }

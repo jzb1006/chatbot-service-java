@@ -47,6 +47,23 @@ class EdgeTextToSpeechClientTest {
     }
 
     @Test
+    void shouldSendConfiguredEdgeVoice() {
+        var transport = new CapturingEdgeTtsTransport(silentPcm());
+        var config = new EdgeTextToSpeechConfig(
+                "zh-CN-YunxiNeural",
+                "audio-24khz-48kbitrate-mono-mp3",
+                16000,
+                "ffmpeg",
+                Duration.ofSeconds(3)
+        );
+        var client = new EdgeTextToSpeechClient(config, transport, new CapturingEdgeAudioDecoder(silentPcm()));
+
+        client.synthesize("浣犲ソ", TextToSpeechOptions.defaults());
+
+        assertThat(transport.request.voice()).isEqualTo("zh-CN-YunxiNeural");
+    }
+
+    @Test
     void shouldUseExplicitVoiceIdWhenPresent() {
         var transport = new CapturingEdgeTtsTransport(silentPcm());
         var config = new EdgeTextToSpeechConfig(
