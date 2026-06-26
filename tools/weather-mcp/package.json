@@ -1,0 +1,15 @@
+{
+  "name": "weather-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Hermes to query current and forecast weather from Open-Meteo.",
+  "type": "module",
+  "bin": {
+    "weather-mcp": "src/index.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

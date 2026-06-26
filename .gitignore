@@ -12,3 +12,4 @@ target/
 /.merge-backup/
 /.zcf/
 __pycache__/
+/tmp/
