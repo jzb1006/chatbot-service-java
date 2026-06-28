@@ -92,6 +92,55 @@ class XiaozhiAutoListenEndpointTest {
         assertThat(endpoint.trailingAvgRms()).isGreaterThan(0.01);
     }
 
+    @Test
+    void shouldDetectEndWhenBackgroundNoiseStaysAboveFixedThreshold() {
+        var endpoint = new XiaozhiAutoListenEndpoint(
+                16000,
+                60,
+                new XiaozhiAutoStopProperties(
+                        true,
+                        Duration.ofMillis(180),
+                        Duration.ofMillis(900),
+                        0.18,
+                        Duration.ofSeconds(6),
+                        Duration.ofSeconds(15)
+                )
+        );
+
+        var results = loudSpeechThenNoisyTailOpusFrames().stream()
+                .map(frame -> endpoint.accept(new XiaozhiAudioFrame(1, 0, toBytes(frame))))
+                .toList();
+
+        assertThat(results).contains(XiaozhiAutoListenEndpoint.Result.END_OF_UTTERANCE);
+        assertThat(results).doesNotContain(XiaozhiAutoListenEndpoint.Result.MAX_DURATION_REACHED);
+        assertThat(endpoint.aboveThresholdFrames()).isGreaterThan(endpoint.belowThresholdFrames());
+        assertThat(endpoint.silenceAfterSpeechMillis()).isGreaterThanOrEqualTo(900);
+    }
+
+    @Test
+    void shouldDetectEndWhenNoisyTailHasShortEnergySpikes() {
+        var endpoint = new XiaozhiAutoListenEndpoint(
+                16000,
+                60,
+                new XiaozhiAutoStopProperties(
+                        true,
+                        Duration.ofMillis(180),
+                        Duration.ofMillis(900),
+                        0.18,
+                        Duration.ofSeconds(6),
+                        Duration.ofSeconds(15)
+                )
+        );
+
+        var results = loudSpeechThenSpikyNoisyTailOpusFrames().stream()
+                .map(frame -> endpoint.accept(new XiaozhiAudioFrame(1, 0, toBytes(frame))))
+                .toList();
+
+        assertThat(results).contains(XiaozhiAutoListenEndpoint.Result.END_OF_UTTERANCE);
+        assertThat(results).doesNotContain(XiaozhiAutoListenEndpoint.Result.MAX_DURATION_REACHED);
+        assertThat(endpoint.silenceAfterSpeechMillis()).isGreaterThanOrEqualTo(900);
+    }
+
     private List<ByteBuffer> speechThenSilenceOpusFrames() {
         var encoder = new StreamingPcmToOpusEncoder(16000, 60);
         var frames = new ArrayList<ByteBuffer>();
@@ -115,6 +164,33 @@ class XiaozhiAutoListenEndpointTest {
         return frames.stream().map(ByteBuffer::slice).toList();
     }
 
+    private List<ByteBuffer> loudSpeechThenNoisyTailOpusFrames() {
+        var encoder = new StreamingPcmToOpusEncoder(16000, 60);
+        var frames = new ArrayList<ByteBuffer>();
+        for (var index = 0; index < 6; index++) {
+            frames.addAll(encoder.accept(tonePcmFrame(index, 24000)));
+        }
+        for (var index = 0; index < 60; index++) {
+            frames.addAll(encoder.accept(tonePcmFrame(index, 12000)));
+        }
+        frames.addAll(encoder.flush());
+        return frames.stream().map(ByteBuffer::slice).toList();
+    }
+
+    private List<ByteBuffer> loudSpeechThenSpikyNoisyTailOpusFrames() {
+        var encoder = new StreamingPcmToOpusEncoder(16000, 60);
+        var frames = new ArrayList<ByteBuffer>();
+        for (var index = 0; index < 6; index++) {
+            frames.addAll(encoder.accept(tonePcmFrame(index, 30000)));
+        }
+        for (var index = 0; index < 120; index++) {
+            var pcm = index % 10 == 0 ? squarePcmFrame(30000) : tonePcmFrame(index, 9000);
+            frames.addAll(encoder.accept(pcm));
+        }
+        frames.addAll(encoder.flush());
+        return frames.stream().map(ByteBuffer::slice).toList();
+    }
+
     private List<ByteBuffer> silenceOpusFrames(int count) {
         var encoder = new StreamingPcmToOpusEncoder(16000, 60);
         var frames = new ArrayList<ByteBuffer>();
@@ -126,16 +202,28 @@ class XiaozhiAutoListenEndpointTest {
     }
 
     private byte[] tonePcmFrame(int frameIndex) {
+        return tonePcmFrame(frameIndex, 12000);
+    }
+
+    private byte[] tonePcmFrame(int frameIndex, int amplitude) {
         var pcm = ByteBuffer.allocate(960 * Short.BYTES).order(ByteOrder.LITTLE_ENDIAN);
         for (var index = 0; index < 960; index++) {
             var sampleIndex = frameIndex * 960 + index;
-            pcm.putShort((short) (12000 * Math.sin(2 * Math.PI * 440 * sampleIndex / 16000)));
+            pcm.putShort((short) (amplitude * Math.sin(2 * Math.PI * 440 * sampleIndex / 16000)));
         }
         return pcm.array();
     }
 
     private byte[] silencePcmFrame() {
         return new byte[960 * Short.BYTES];
+    }
+
+    private byte[] squarePcmFrame(int amplitude) {
+        var pcm = ByteBuffer.allocate(960 * Short.BYTES).order(ByteOrder.LITTLE_ENDIAN);
+        for (var index = 0; index < 960; index++) {
+            pcm.putShort((short) (index % 2 == 0 ? amplitude : -amplitude));
+        }
+        return pcm.array();
     }
 
     private byte[] toBytes(ByteBuffer buffer) {

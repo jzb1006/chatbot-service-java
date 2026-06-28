@@ -10,6 +10,9 @@ import java.nio.ByteOrder;
  */
 final class XiaozhiAutoListenEndpoint {
 
+    private static final double RELATIVE_SILENCE_RATIO = 0.65;
+    private static final double WINDOW_MIN_SILENCE_RATIO = 0.35;
+
     enum Result {
         CONTINUE,
         END_OF_UTTERANCE,
@@ -68,7 +71,8 @@ final class XiaozhiAutoListenEndpoint {
         if (totalMillis >= maxDurationMillis) {
             return Result.MAX_DURATION_REACHED;
         }
-        if (frameRms >= speechRmsThreshold) {
+        var aboveSpeechThreshold = frameRms >= speechRmsThreshold;
+        if (!speechStarted && aboveSpeechThreshold) {
             aboveThresholdFrames++;
             candidateSpeechMillis += frameDurationMillis;
             silenceAfterSpeechMillis = 0;
@@ -77,10 +81,18 @@ final class XiaozhiAutoListenEndpoint {
             }
             return Result.CONTINUE;
         }
-        belowThresholdFrames++;
+        if (aboveSpeechThreshold) {
+            aboveThresholdFrames++;
+        } else {
+            belowThresholdFrames++;
+        }
         if (!speechStarted) {
             candidateSpeechMillis = 0;
             return totalMillis >= noSpeechTimeoutMillis ? Result.NO_SPEECH_TIMEOUT : Result.CONTINUE;
+        }
+        if (!isSilenceAfterSpeech(frameRms)) {
+            silenceAfterSpeechMillis = 0;
+            return Result.CONTINUE;
         }
         silenceAfterSpeechMillis += frameDurationMillis;
         return silenceAfterSpeechMillis >= silenceMillis ? Result.END_OF_UTTERANCE : Result.CONTINUE;
@@ -166,6 +178,16 @@ final class XiaozhiAutoListenEndpoint {
             return 0.0;
         }
         return Math.sqrt(sumSquares / sampleCount) / Short.MAX_VALUE;
+    }
+
+    private boolean isSilenceAfterSpeech(double frameRms) {
+        var adaptiveSilenceThreshold = Math.max(speechRmsThreshold, peakRms * RELATIVE_SILENCE_RATIO);
+        if (frameRms < adaptiveSilenceThreshold) {
+            return true;
+        }
+        var stats = trailingRmsStats();
+        var windowMinSilenceThreshold = Math.max(speechRmsThreshold, peakRms * WINDOW_MIN_SILENCE_RATIO);
+        return stats.avg() < adaptiveSilenceThreshold && stats.min() < windowMinSilenceThreshold;
     }
 
     private record RmsStats(double min, double avg) {
