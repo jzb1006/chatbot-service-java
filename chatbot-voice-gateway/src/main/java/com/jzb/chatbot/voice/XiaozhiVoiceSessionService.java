@@ -92,6 +92,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
     private final XiaozhiMusicActionHandler musicActionHandler;
     private final XiaozhiMusicPlaybackRuntime musicPlaybackRuntime;
     private final XiaozhiSessionEndProperties sessionEndProperties;
+    private final XiaozhiTtsTextSanitizer ttsTextSanitizer = new XiaozhiTtsTextSanitizer();
     private final Map<String, XiaozhiVoiceSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, WebSocketSession> webSocketSessions = new ConcurrentHashMap<>();
     private final Map<String, String> deviceSessionIds = new ConcurrentHashMap<>();
@@ -1245,7 +1246,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                             return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
                         }
                         reply.append(text);
-                        sentences.addAll(segmenter.accept(text));
+                        sentences.addAll(segmenter.accept(ttsTextSanitizer.sanitize(text)));
                     }
                 }
             }
@@ -1266,7 +1267,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                     return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
                 }
                 reply.append(text);
-                sentences.addAll(segmenter.accept(text));
+                sentences.addAll(segmenter.accept(ttsTextSanitizer.sanitize(text)));
             }
             var finalSentence = segmenter.flush();
             if (!finalSentence.isBlank()) {
@@ -1274,7 +1275,10 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
             }
             if (reply.toString().isBlank() && reminderConfirmationText.get() != null && !reminderConfirmationText.get().isBlank()) {
                 reply.append(reminderConfirmationText.get());
-                sentences.add(reminderConfirmationText.get());
+                var sanitizedConfirmationText = ttsTextSanitizer.sanitize(reminderConfirmationText.get());
+                if (!sanitizedConfirmationText.isBlank()) {
+                    sentences.add(sanitizedConfirmationText);
+                }
             }
             if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
                 return cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);
@@ -1509,7 +1513,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
                 }
         )) {
             reply.append(text);
-            for (var sentence : segmenter.accept(text)) {
+            for (var sentence : segmenter.accept(ttsTextSanitizer.sanitize(text))) {
                 sentenceSink.accept(sentence);
             }
         }
@@ -1546,7 +1550,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         )) {
             ensureTurnActive(webSocketSession, voiceSession, turnGeneration, turnGuard);
             reply.append(text);
-            for (var sentence : segmenter.accept(text)) {
+            for (var sentence : segmenter.accept(ttsTextSanitizer.sanitize(text))) {
                 sentenceSink.accept(sentence);
             }
         }
@@ -1557,7 +1561,7 @@ public class XiaozhiVoiceSessionService implements ApplicationEventPublisherAwar
         }
         if (reply.toString().isBlank() && confirmationRef.get() != null && !confirmationRef.get().isBlank()) {
             reply.append(confirmationRef.get());
-            sentenceSink.accept(confirmationRef.get());
+            sentenceSink.accept(ttsTextSanitizer.sanitize(confirmationRef.get()));
         }
         if (turnCancelled(webSocketSession, voiceSession, turnGeneration) || !turnGuard.active()) {
             cancelTurnBeforeRuntime(webSocketSession, voiceSession, reply.toString(), asrMillis, hermesStartedAt);

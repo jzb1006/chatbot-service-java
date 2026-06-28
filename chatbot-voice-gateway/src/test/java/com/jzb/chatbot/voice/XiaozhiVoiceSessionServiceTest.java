@@ -65,6 +65,7 @@ class XiaozhiVoiceSessionServiceTest {
 
     private final XiaozhiMessageCodec codec = new XiaozhiMessageCodec(new ObjectMapper());
     private final XiaozhiVoiceSessionService service = newService();
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
     void shouldStoreFirmwareHandshakeParametersWhenSessionOpened() {
@@ -802,6 +803,33 @@ class XiaozhiVoiceSessionServiceTest {
                 .extracting(message -> message.getPayload().toString())
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "\"text\":\"第一句内容很完整。\""))
                 .anySatisfy(payload -> assertThat(payload).contains("\"type\":\"tts\"", "\"state\":\"sentence_start\"", "\"text\":\"第二句内容也完整。\""));
+    }
+
+    @Test
+    void shouldSanitizeMarkdownBeforeSynchronousTts() {
+        var ttsClient = new RecordingTextToSpeechClient();
+        var serviceWithMarkdownReply = newService(
+                new FakeSpeechToTextClient(),
+                new StreamingHermesClient(sseDelta("""
+                        查到了。
+
+                        **价格方面**，参考价大概15.88到20.98万。
+
+                        - **口碑方面**，车主好评集中在底盘扎实。
+                        """)),
+                ttsClient
+        );
+        var session = openSession(serviceWithMarkdownReply);
+
+        runSingleTurn(serviceWithMarkdownReply, session);
+
+        assertThat(ttsClient.texts()).containsExactly(
+                "查到了。 价格方面，",
+                "参考价大概15.88到20.98万。",
+                "口碑方面，车主好评集中在底盘扎实。"
+        );
+        assertThat(ttsClient.texts())
+                .allSatisfy(text -> assertThat(text).doesNotContain("*", "\n", "\r"));
     }
 
     @Test
@@ -2076,6 +2104,37 @@ class XiaozhiVoiceSessionServiceTest {
     }
 
     @Test
+    void shouldSanitizeMarkdownBeforeStreamingTts() {
+        var hermes = new StreamingHermesClient(sseDelta("""
+                查到了。
+
+                **价格方面**，参考价大概15.88到20.98万。
+
+                - **口碑方面**，车主好评集中在底盘扎实。
+                """));
+        var streamingTts = new RecordingStreamingTextToSpeechClient();
+        var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
+        var runtime = new XiaozhiTtsRuntime(
+                new FakeTextToSpeechClient(),
+                streamingTts,
+                codec,
+                eventFactory
+        );
+        var serviceWithStreamingTts = newService(new FakeSpeechToTextClient(), hermes, runtime, eventFactory);
+        var session = openSession(serviceWithStreamingTts);
+
+        runSingleTurn(serviceWithStreamingTts, session);
+
+        assertThat(streamingTts.texts()).containsExactly(
+                "查到了。 价格方面，",
+                "参考价大概15.88到20.98万。",
+                "口碑方面，车主好评集中在底盘扎实。"
+        );
+        assertThat(streamingTts.texts())
+                .allSatisfy(text -> assertThat(text).doesNotContain("*", "\n", "\r"));
+    }
+
+    @Test
     void shouldUseStreamingRuntimeForNotificationWhenStreamingTtsIsEnabled() {
         var eventFactory = new XiaozhiServerEventFactory(new ObjectMapper());
         var streamingTts = new RecordingStreamingTextToSpeechClient();
@@ -2652,6 +2711,16 @@ class XiaozhiVoiceSessionServiceTest {
         return newService(new FakeTextToSpeechClient());
     }
 
+    private String sseDelta(String text) {
+        try {
+            return "event: response.output_text.delta\ndata: "
+                    + objectMapper.writeValueAsString(Map.of("delta", text))
+                    + "\n\n";
+        } catch (IOException exception) {
+            throw new IllegalStateException("failed to build test sse delta", exception);
+        }
+    }
+
     private XiaozhiVoiceSessionService newService(TextToSpeechClient textToSpeechClient) {
         return newService(new FakeSpeechToTextClient(), new FakeHermesClient(), textToSpeechClient);
     }
@@ -3182,7 +3251,14 @@ class XiaozhiVoiceSessionServiceTest {
         @Override
         public Stream<String> streamChat(HermesRequest request, HermesClientConfig config) {
             return chunks.stream()
-                    .map(chunk -> "event: response.output_text.delta\ndata: {\"delta\":\"" + chunk + "\"}\n\n");
+                    .map(StreamingHermesClient::toSseChunk);
+        }
+
+        private static String toSseChunk(String chunk) {
+            if (chunk.startsWith("event:")) {
+                return chunk;
+            }
+            return "event: response.output_text.delta\ndata: {\"delta\":\"" + chunk + "\"}\n\n";
         }
     }
 
