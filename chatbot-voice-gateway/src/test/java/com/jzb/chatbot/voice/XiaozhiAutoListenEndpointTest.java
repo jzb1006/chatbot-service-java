@@ -93,7 +93,7 @@ class XiaozhiAutoListenEndpointTest {
     }
 
     @Test
-    void shouldDetectEndWhenBackgroundNoiseStaysAboveFixedThreshold() {
+    void shouldDetectEndWhenNoisyTailStaysBelowSpeechThreshold() {
         var endpoint = new XiaozhiAutoListenEndpoint(
                 16000,
                 60,
@@ -113,7 +113,7 @@ class XiaozhiAutoListenEndpointTest {
 
         assertThat(results).contains(XiaozhiAutoListenEndpoint.Result.END_OF_UTTERANCE);
         assertThat(results).doesNotContain(XiaozhiAutoListenEndpoint.Result.MAX_DURATION_REACHED);
-        assertThat(endpoint.aboveThresholdFrames()).isGreaterThan(endpoint.belowThresholdFrames());
+        assertThat(endpoint.belowThresholdFrames()).isGreaterThan(endpoint.aboveThresholdFrames());
         assertThat(endpoint.silenceAfterSpeechMillis()).isGreaterThanOrEqualTo(900);
     }
 
@@ -139,6 +139,30 @@ class XiaozhiAutoListenEndpointTest {
         assertThat(results).contains(XiaozhiAutoListenEndpoint.Result.END_OF_UTTERANCE);
         assertThat(results).doesNotContain(XiaozhiAutoListenEndpoint.Result.MAX_DURATION_REACHED);
         assertThat(endpoint.silenceAfterSpeechMillis()).isGreaterThanOrEqualTo(900);
+    }
+
+    @Test
+    void shouldNotTreatQuieterSpeechAfterLoudOpeningAsSilence() {
+        var endpoint = new XiaozhiAutoListenEndpoint(
+                16000,
+                60,
+                new XiaozhiAutoStopProperties(
+                        true,
+                        Duration.ofMillis(180),
+                        Duration.ofMillis(900),
+                        0.18,
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(4)
+                )
+        );
+
+        var results = loudOpeningThenQuieterSpeechOpusFrames().stream()
+                .map(frame -> endpoint.accept(new XiaozhiAudioFrame(1, 0, toBytes(frame))))
+                .toList();
+
+        assertThat(results).doesNotContain(XiaozhiAutoListenEndpoint.Result.END_OF_UTTERANCE);
+        assertThat(results).contains(XiaozhiAutoListenEndpoint.Result.MAX_DURATION_REACHED);
+        assertThat(endpoint.aboveThresholdFrames()).isGreaterThan(endpoint.belowThresholdFrames());
     }
 
     private List<ByteBuffer> speechThenSilenceOpusFrames() {
@@ -171,7 +195,20 @@ class XiaozhiAutoListenEndpointTest {
             frames.addAll(encoder.accept(tonePcmFrame(index, 24000)));
         }
         for (var index = 0; index < 60; index++) {
-            frames.addAll(encoder.accept(tonePcmFrame(index, 12000)));
+            frames.addAll(encoder.accept(tonePcmFrame(index, 7000)));
+        }
+        frames.addAll(encoder.flush());
+        return frames.stream().map(ByteBuffer::slice).toList();
+    }
+
+    private List<ByteBuffer> loudOpeningThenQuieterSpeechOpusFrames() {
+        var encoder = new StreamingPcmToOpusEncoder(16000, 60);
+        var frames = new ArrayList<ByteBuffer>();
+        for (var index = 0; index < 6; index++) {
+            frames.addAll(encoder.accept(tonePcmFrame(index, 24000)));
+        }
+        for (var index = 0; index < 80; index++) {
+            frames.addAll(encoder.accept(tonePcmFrame(index, 14000)));
         }
         frames.addAll(encoder.flush());
         return frames.stream().map(ByteBuffer::slice).toList();
@@ -184,7 +221,7 @@ class XiaozhiAutoListenEndpointTest {
             frames.addAll(encoder.accept(tonePcmFrame(index, 30000)));
         }
         for (var index = 0; index < 120; index++) {
-            var pcm = index % 10 == 0 ? squarePcmFrame(30000) : tonePcmFrame(index, 9000);
+            var pcm = index % 10 == 0 ? squarePcmFrame(30000) : tonePcmFrame(index, 5000);
             frames.addAll(encoder.accept(pcm));
         }
         frames.addAll(encoder.flush());

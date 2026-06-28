@@ -12,6 +12,7 @@ final class XiaozhiAutoListenEndpoint {
 
     private static final double RELATIVE_SILENCE_RATIO = 0.65;
     private static final double WINDOW_MIN_SILENCE_RATIO = 0.35;
+    private static final double WINDOW_MAX_SPEECH_SPIKE_RATIO = 0.25;
 
     enum Result {
         CONTINUE,
@@ -90,7 +91,7 @@ final class XiaozhiAutoListenEndpoint {
             candidateSpeechMillis = 0;
             return totalMillis >= noSpeechTimeoutMillis ? Result.NO_SPEECH_TIMEOUT : Result.CONTINUE;
         }
-        if (!isSilenceAfterSpeech(frameRms)) {
+        if (!isSilenceAfterSpeech(frameRms, aboveSpeechThreshold)) {
             silenceAfterSpeechMillis = 0;
             return Result.CONTINUE;
         }
@@ -153,16 +154,20 @@ final class XiaozhiAutoListenEndpoint {
     private RmsStats trailingRmsStats() {
         var sampleCount = Math.min(frameCount, trailingRms.length);
         if (sampleCount == 0) {
-            return new RmsStats(0.0, 0.0);
+            return new RmsStats(0.0, 0.0, 0, 0);
         }
         var sum = 0.0;
         var min = Double.POSITIVE_INFINITY;
+        var aboveThresholdCount = 0;
         for (var index = 0; index < sampleCount; index++) {
             var value = trailingRms[index];
             sum += value;
             min = Math.min(min, value);
+            if (value >= speechRmsThreshold) {
+                aboveThresholdCount++;
+            }
         }
-        return new RmsStats(min, sum / sampleCount);
+        return new RmsStats(min, sum / sampleCount, aboveThresholdCount, sampleCount);
     }
 
     private double rms(byte[] pcm) {
@@ -180,16 +185,25 @@ final class XiaozhiAutoListenEndpoint {
         return Math.sqrt(sumSquares / sampleCount) / Short.MAX_VALUE;
     }
 
-    private boolean isSilenceAfterSpeech(double frameRms) {
-        var adaptiveSilenceThreshold = Math.max(speechRmsThreshold, peakRms * RELATIVE_SILENCE_RATIO);
-        if (frameRms < adaptiveSilenceThreshold) {
+    private boolean isSilenceAfterSpeech(double frameRms, boolean aboveSpeechThreshold) {
+        if (!aboveSpeechThreshold) {
             return true;
         }
+        var adaptiveSilenceThreshold = Math.max(speechRmsThreshold, peakRms * RELATIVE_SILENCE_RATIO);
         var stats = trailingRmsStats();
         var windowMinSilenceThreshold = Math.max(speechRmsThreshold, peakRms * WINDOW_MIN_SILENCE_RATIO);
-        return stats.avg() < adaptiveSilenceThreshold && stats.min() < windowMinSilenceThreshold;
+        return stats.avg() < adaptiveSilenceThreshold
+                && stats.min() < windowMinSilenceThreshold
+                && stats.aboveThresholdRatio() <= WINDOW_MAX_SPEECH_SPIKE_RATIO;
     }
 
-    private record RmsStats(double min, double avg) {
+    private record RmsStats(double min, double avg, long aboveThresholdCount, long sampleCount) {
+
+        private double aboveThresholdRatio() {
+            if (sampleCount == 0) {
+                return 0.0;
+            }
+            return (double) aboveThresholdCount / sampleCount;
+        }
     }
 }
