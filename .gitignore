@@ -4,6 +4,7 @@ target/
 *.class
 *.log
 .DS_Store
+node_modules/
 /tools/ws_debug_console/
 *.env
 !.env.example
