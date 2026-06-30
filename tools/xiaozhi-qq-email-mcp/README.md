@@ -51,6 +51,7 @@ Hermes should handle natural language understanding:
 - Parse scheduled send time when needed.
 - Choose plain text vs HTML automatically. Use plain text for short personal messages; use HTML for structured project notices, deployment summaries, links, highlighted status, travel plans, reports, or content that benefits from visual hierarchy.
 - For HTML email, prefer a polished visual layout with a headline section, clear sections, highlighted facts, buttons or links when useful, tables for dense comparisons, and http/https images when they materially help the reader.
+- Generate Gmail/QQ-compatible email HTML by default: use table-based body layout, keep critical styles inline, and treat `<style>` blocks/classes as progressive enhancement instead of required layout.
 - Polish the subject and body before sending.
 - Summarize recipient, subject, and body before asking the user for confirmation.
 - For scheduled email, create the Hermes cron task only after confirmation.
@@ -64,6 +65,7 @@ The MCP enforces deterministic constraints:
 - HTML body max length is 10000 characters.
 - HTML sending keeps common email tags: `div`, `span`, `h1`-`h3`, `p`, `br`, `hr`, `strong`, `b`, `em`, `i`, `ul`, `ol`, `li`, `a`, `table`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td`, `img`, and `style`.
 - HTML sending supports classes, restricted inline CSS, and restricted `<style>` blocks.
+- For cross-client rendering, critical layout and visual styles should be inline. `<style>` blocks are allowed but must not be the only source of layout, spacing, button, or image sizing styles.
 - CSS only keeps safe properties such as `color`, `background`, `background-color`, `font-size`, `font-weight`, `font-style`, `font-family`, `text-align`, `line-height`, `padding`, `margin`, `border`, `border-radius`, `width`, `max-width`, `height`, `display`, `vertical-align`, and table spacing properties.
 - CSS drops `url()`, `expression()`, `javascript:`, `data:`, `@import`, `position`, `display:none`, and unsupported properties.
 - Images must use `http://` or `https://` URLs. The sanitizer keeps only safe `src`, `alt`, `width`, `height`, `class`, and `style` attributes.

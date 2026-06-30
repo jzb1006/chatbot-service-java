@@ -115,7 +115,7 @@ const tools = [
   {
     name: "send_html_email",
     description:
-      "通过 QQ 邮箱发送视觉增强 HTML 邮件。Hermes 必须先润色 subject 和 html，并向用户复述收件人、标题、正文摘要，获得确认后才调用。recipientAlias 必须来自白名单；可使用常见邮件 HTML 标签、style 块、class、表格、按钮链接和 http/https 图片，工具会清洗脚本与危险资源、生成纯文本 fallback，并自动追加 AI 助手署名。",
+      "通过 QQ 邮箱发送视觉增强 HTML 邮件。Hermes 必须先润色 subject 和 html，并向用户复述收件人、标题、正文摘要，获得确认后才调用。recipientAlias 必须来自白名单；优先生成 Gmail/QQ 邮件客户端兼容 HTML：主体用 table 布局，关键样式写 inline style，style 块和 class 只做增强；可使用常见邮件 HTML 标签、表格、按钮链接和 http/https 图片，工具会清洗脚本与危险资源、生成纯文本 fallback，并自动追加 AI 助手署名。",
     inputSchema: {
       type: "object",
       properties: {
@@ -129,7 +129,7 @@ const tools = [
         },
         html: {
           type: "string",
-          description: "AI 润色后的 HTML 正文。优先做出清晰视觉层级，可使用 style 块、class、表格、分区、按钮链接和 http/https 图片；不要包含脚本、表单、data URL、javascript URL 或外链 CSS。",
+          description: "AI 润色后的 HTML 正文。优先做出清晰视觉层级，并兼容 Gmail/QQ：主体布局使用 table，关键颜色、字号、间距、边框、按钮和图片尺寸写 inline style；style 块和 class 只作为增强，不承载核心布局。可使用分区、卡片、表格、按钮链接和 http/https 图片；不要包含脚本、表单、data URL、javascript URL 或外链 CSS。",
         },
       },
       required: ["recipientAlias", "subject", "html"],
