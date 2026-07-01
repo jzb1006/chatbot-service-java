@@ -2126,8 +2126,7 @@ class XiaozhiVoiceSessionServiceTest {
         runSingleTurn(serviceWithStreamingTts, session);
 
         assertThat(streamingTts.texts()).containsExactly(
-                "查到了。 价格方面，",
-                "参考价大概15.88到20.98万。",
+                "查到了。 价格方面，参考价大概15.88到20.98万。",
                 "口碑方面，车主好评集中在底盘扎实。"
         );
         assertThat(streamingTts.texts())

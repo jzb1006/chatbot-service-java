@@ -7,6 +7,7 @@ import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
@@ -19,6 +20,7 @@ import org.springframework.web.socket.WebSocketSession;
  * @author jiangzhibin
  * @since 2026-06-17 16:50:00
  */
+@Slf4j
 public class XiaozhiTtsPlayback {
 
     private static final long OPUS_FRAME_SEND_INTERVAL_NS = 60_000_000L;
@@ -31,10 +33,18 @@ public class XiaozhiTtsPlayback {
     private final XiaozhiMessageCodec codec;
     private final XiaozhiServerEventFactory eventFactory;
     private final BooleanSupplier cancellationRequested;
+    private final long sentenceGapNs;
     private final AtomicBoolean cancelled = new AtomicBoolean();
     private final AtomicBoolean stopSent = new AtomicBoolean();
     private long startTimestamp;
     private long playPosition = BURST_PREBUFFER_NS;
+    private String currentSentence;
+    private int currentSentenceIndex;
+    private long currentSentenceStartedAt;
+    private long currentSentenceFirstBinaryAt;
+    private long currentSentenceLastBinaryAt;
+    private long currentSentenceMaxFrameGapNs;
+    private int currentSentenceFrameCount;
     private volatile int startedSentences;
     private volatile int sentFrames;
 
@@ -54,11 +64,52 @@ public class XiaozhiTtsPlayback {
             XiaozhiServerEventFactory eventFactory,
             BooleanSupplier cancellationRequested
     ) {
+        this(webSocketSession, voiceSession, codec, eventFactory, cancellationRequested, SENTENCE_GAP_NS);
+    }
+
+    /**
+     * 创建流式 TTS 播放控制器。
+     * <p>
+     * 流式 provider 自身连续推送音频帧，不额外插入同步 TTS 的句间停顿。
+     *
+     * @param webSocketSession WebSocket 会话
+     * @param voiceSession 小智语音会话
+     * @param codec 小智消息编解码器
+     * @param eventFactory 小智服务端事件工厂
+     * @param cancellationRequested 取消状态提供器
+     * @return 流式 TTS 播放控制器
+     */
+    public static XiaozhiTtsPlayback streaming(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiMessageCodec codec,
+            XiaozhiServerEventFactory eventFactory,
+            BooleanSupplier cancellationRequested
+    ) {
+        return new XiaozhiTtsPlayback(
+                webSocketSession,
+                voiceSession,
+                codec,
+                eventFactory,
+                cancellationRequested,
+                0L
+        );
+    }
+
+    private XiaozhiTtsPlayback(
+            WebSocketSession webSocketSession,
+            XiaozhiVoiceSession voiceSession,
+            XiaozhiMessageCodec codec,
+            XiaozhiServerEventFactory eventFactory,
+            BooleanSupplier cancellationRequested,
+            long sentenceGapNs
+    ) {
         this.webSocketSession = webSocketSession;
         this.voiceSession = voiceSession;
         this.codec = codec;
         this.eventFactory = eventFactory;
         this.cancellationRequested = cancellationRequested == null ? () -> false : cancellationRequested;
+        this.sentenceGapNs = sentenceGapNs;
     }
 
     public boolean playSentence(String sentence, List<ByteBuffer> frames) throws IOException {
@@ -87,8 +138,9 @@ public class XiaozhiTtsPlayback {
         if (cancelled()) {
             return false;
         }
-        if (sentFrames > 0) {
-            playPosition += SENTENCE_GAP_NS;
+        finishSentenceDiagnostics();
+        if (sentFrames > 0 && sentenceGapNs > 0) {
+            playPosition += sentenceGapNs;
             waitForFrameTime();
         }
         if (cancelled()) {
@@ -96,6 +148,13 @@ public class XiaozhiTtsPlayback {
         }
         sendText(eventFactory.ttsSentenceStart(voiceSession.sessionId(), sentence));
         startedSentences++;
+        currentSentence = sentence;
+        currentSentenceIndex = startedSentences;
+        currentSentenceStartedAt = System.nanoTime();
+        currentSentenceFirstBinaryAt = 0L;
+        currentSentenceLastBinaryAt = 0L;
+        currentSentenceMaxFrameGapNs = 0L;
+        currentSentenceFrameCount = 0;
         return true;
     }
 
@@ -110,12 +169,14 @@ public class XiaozhiTtsPlayback {
         webSocketSession.sendMessage(new BinaryMessage(
                 codec.encodeAudioFrame(voiceSession.protocolVersion(), 0, frame)
         ));
+        recordBinarySent();
         sentFrames++;
         playPosition += OPUS_FRAME_SEND_INTERVAL_NS;
         return true;
     }
 
     public void cancel() {
+        finishSentenceDiagnostics();
         cancelled.set(true);
     }
 
@@ -124,6 +185,7 @@ public class XiaozhiTtsPlayback {
     }
 
     public boolean markStopSent() {
+        finishSentenceDiagnostics();
         return stopSent.compareAndSet(false, true);
     }
 
@@ -167,5 +229,55 @@ public class XiaozhiTtsPlayback {
 
     private void sendText(String payload) throws IOException {
         webSocketSession.sendMessage(new TextMessage(payload));
+    }
+
+    private void recordBinarySent() {
+        if (currentSentence == null) {
+            return;
+        }
+        var now = System.nanoTime();
+        if (currentSentenceFirstBinaryAt == 0L) {
+            currentSentenceFirstBinaryAt = now;
+        }
+        if (currentSentenceLastBinaryAt > 0L) {
+            currentSentenceMaxFrameGapNs = Math.max(currentSentenceMaxFrameGapNs, now - currentSentenceLastBinaryAt);
+        }
+        currentSentenceLastBinaryAt = now;
+        currentSentenceFrameCount++;
+    }
+
+    private void finishSentenceDiagnostics() {
+        if (currentSentence == null) {
+            return;
+        }
+        var firstBinaryMs = currentSentenceFirstBinaryAt == 0L
+                ? -1L
+                : elapsedMillis(currentSentenceStartedAt, currentSentenceFirstBinaryAt);
+        var maxFrameGapMs = currentSentenceMaxFrameGapNs == 0L
+                ? 0L
+                : currentSentenceMaxFrameGapNs / 1_000_000L;
+        var durationMs = currentSentenceLastBinaryAt == 0L
+                ? elapsedMillis(currentSentenceStartedAt, System.nanoTime())
+                : elapsedMillis(currentSentenceStartedAt, currentSentenceLastBinaryAt);
+        log.info("xiaozhi tts sentence playback, sessionId={}, deviceId={}, sentenceIndex={}, frameCount={}, firstBinaryMs={}, maxFrameGapMs={}, durationMs={}, sentenceText={}",
+                voiceSession.sessionId(),
+                voiceSession.deviceId(),
+                currentSentenceIndex,
+                currentSentenceFrameCount,
+                firstBinaryMs,
+                maxFrameGapMs,
+                durationMs,
+                currentSentence);
+        currentSentence = null;
+        currentSentenceIndex = 0;
+        currentSentenceStartedAt = 0L;
+        currentSentenceFirstBinaryAt = 0L;
+        currentSentenceLastBinaryAt = 0L;
+        currentSentenceMaxFrameGapNs = 0L;
+        currentSentenceFrameCount = 0;
+    }
+
+    private long elapsedMillis(long start, long end) {
+        return Math.max(0L, (end - start) / 1_000_000L);
     }
 }

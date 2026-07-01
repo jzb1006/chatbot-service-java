@@ -3,6 +3,8 @@ package com.jzb.chatbot.voice;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -30,6 +32,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.socket.BinaryMessage;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketMessage;
@@ -72,6 +75,43 @@ class XiaozhiTtsRuntimeTest {
         assertThat(result.sentenceCount()).isEqualTo(2);
         assertThat(result.ttsFrames()).isEqualTo(5);
         assertThat(result.cancelled()).isFalse();
+    }
+
+    @Test
+    void shouldLogSentencePlaybackDiagnostics() {
+        var logger = (Logger) LoggerFactory.getLogger(XiaozhiTtsPlayback.class);
+        var appender = new ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            var runtime = newRuntime(new SequencedFrameTextToSpeechClient(2));
+            var session = openSession();
+            var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+            var result = runtime.play(new XiaozhiTtsRequest(
+                    session,
+                    voiceSession,
+                    List.of("第一句内容。"),
+                    TextToSpeechOptions.defaults()
+            ));
+
+            assertThat(result.played()).isTrue();
+            assertThat(appender.list)
+                    .extracting(event -> event.getFormattedMessage())
+                    .anySatisfy(message -> assertThat(message)
+                            .contains(
+                                    "xiaozhi tts sentence playback",
+                                    "sessionId=ws-session-1",
+                                    "deviceId=ws-session-1",
+                                    "sentenceIndex=1",
+                                    "frameCount=2",
+                                    "firstBinaryMs=",
+                                    "maxFrameGapMs=",
+                                    "sentenceText=第一句内容。"
+                            ));
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     @Test
@@ -499,6 +539,102 @@ class XiaozhiTtsRuntimeTest {
         assertThat(textPayloads(session))
                 .filteredOn(payload -> payload.contains("\"type\":\"tts\"") && payload.contains("\"state\":\"stop\""))
                 .hasSize(1);
+    }
+
+    @Test
+    void shouldNotAddArtificialSentenceGapForStreamingPlayback() {
+        var runtime = newRuntimeWithStreamingTts(new PushStreamingTextToSpeechClient());
+        var session = new TimingWebSocketSession("ws-session-1");
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        var result = runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                voiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> {
+            sentenceSink.accept("第一句内容已经足够长，可以马上播放。");
+            sentenceSink.accept("第二句内容也足够长，可以继续播放。");
+            sentenceSink.complete();
+        });
+
+        assertThat(result.played()).isTrue();
+        assertThat(sentenceStartTexts(session))
+                .containsExactly("第一句内容已经足够长，可以马上播放。", "第二句内容也足够长，可以继续播放。");
+        assertThat(session.binarySentAt()).hasSize(2);
+        var gapBetweenStreamingSentences = session.binarySentAt().get(1) - session.binarySentAt().get(0);
+        assertThat(gapBetweenStreamingSentences)
+                .isLessThan(TimeUnit.MILLISECONDS.toNanos(180L));
+    }
+
+    @Test
+    void shouldMergeShortStreamingCommaFragmentsBeforePlayback() {
+        var streamingClient = new RecordingStreamingTextToSpeechClient();
+        var runtime = newRuntimeWithStreamingTts(streamingClient);
+        var session = openSession();
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        var result = runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                voiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> {
+            sentenceSink.accept("广州现在雷暴，");
+            sentenceSink.accept("30度，");
+            sentenceSink.accept("外出记得带伞，路上会有积水。");
+            sentenceSink.complete();
+        });
+
+        assertThat(result.played()).isTrue();
+        assertThat(streamingClient.texts())
+                .containsExactly("广州现在雷暴，30度，外出记得带伞，路上会有积水。");
+        assertThat(sentenceStartTexts(session))
+                .containsExactly("广州现在雷暴，30度，外出记得带伞，路上会有积水。");
+    }
+
+    @Test
+    void shouldFlushLongStreamingSentenceAtStrongPunctuation() {
+        var streamingClient = new RecordingStreamingTextToSpeechClient();
+        var runtime = newRuntimeWithStreamingTts(streamingClient);
+        var session = openSession();
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        var result = runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                voiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> {
+            sentenceSink.accept("第一句内容已经足够长，可以马上播放。");
+            sentenceSink.accept("第二句内容也足够长，可以继续播放。");
+            sentenceSink.complete();
+        });
+
+        assertThat(result.played()).isTrue();
+        assertThat(streamingClient.texts())
+                .containsExactly("第一句内容已经足够长，可以马上播放。", "第二句内容也足够长，可以继续播放。");
+        assertThat(sentenceStartTexts(session))
+                .containsExactly("第一句内容已经足够长，可以马上播放。", "第二句内容也足够长，可以继续播放。");
+    }
+
+    @Test
+    void shouldFlushPendingStreamingSentenceWhenProducerDoesNotComplete() {
+        var streamingClient = new RecordingStreamingTextToSpeechClient();
+        var runtime = newRuntimeWithStreamingTts(streamingClient);
+        var session = openSession();
+        var voiceSession = new XiaozhiVoiceSession(session.getId());
+
+        var result = runtime.playStreaming(new XiaozhiStreamingTtsRequest(
+                session,
+                voiceSession,
+                TextToSpeechOptions.defaults(),
+                () -> false
+        ), sentenceSink -> sentenceSink.accept("没有显式完成但也要播放，"));
+
+        assertThat(result.played()).isTrue();
+        assertThat(streamingClient.texts()).containsExactly("没有显式完成但也要播放，");
+        assertThat(sentenceStartTexts(session)).containsExactly("没有显式完成但也要播放，");
     }
 
     @Test
@@ -935,6 +1071,66 @@ class XiaozhiTtsRuntimeTest {
 
         @Override
         public void sendText(String text) {
+            listener.onAudioFrame(ByteBuffer.wrap(new byte[] {1, 2, 3}));
+        }
+
+        @Override
+        public void complete() {
+            completed = true;
+            listener.onCompleted();
+        }
+
+        @Override
+        public void cancel() {
+            completed = true;
+        }
+
+        @Override
+        public boolean awaitFinal(Duration timeout) {
+            return completed;
+        }
+
+        @Override
+        public void close() {
+            cancel();
+        }
+    }
+
+    private static class RecordingStreamingTextToSpeechClient implements StreamingTextToSpeechClient {
+
+        private final List<String> texts = new ArrayList<>();
+
+        @Override
+        public StreamingTextToSpeechSession open(
+                TextToSpeechOptions options,
+                StreamingTextToSpeechListener listener
+        ) {
+            listener.onReady();
+            return new RecordingStreamingTextToSpeechSession(listener, texts);
+        }
+
+        private List<String> texts() {
+            return List.copyOf(texts);
+        }
+    }
+
+    private static class RecordingStreamingTextToSpeechSession implements StreamingTextToSpeechSession {
+
+        private final StreamingTextToSpeechListener listener;
+        private final List<String> texts;
+        private boolean completed;
+
+        private RecordingStreamingTextToSpeechSession(
+                StreamingTextToSpeechListener listener,
+                List<String> texts
+        ) {
+            this.listener = listener;
+            this.texts = texts;
+        }
+
+        @Override
+        public void sendText(String text) {
+            texts.add(text);
             listener.onAudioFrame(ByteBuffer.wrap(new byte[] {1, 2, 3}));
         }
 

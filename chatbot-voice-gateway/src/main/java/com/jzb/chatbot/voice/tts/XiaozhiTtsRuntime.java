@@ -41,6 +41,7 @@ public class XiaozhiTtsRuntime {
     private static final long STOP_DELAY_POLL_MS = 10L;
     private static final Duration STREAMING_FINAL_TIMEOUT = Duration.ofSeconds(30);
     private static final Duration STREAMING_FINAL_MAX_TIMEOUT = Duration.ofMinutes(2);
+    private static final String STREAMING_STRONG_ENDINGS = "。！？!?";
 
     private final TextToSpeechClient textToSpeechClient;
     private final StreamingTextToSpeechClient streamingTextToSpeechClient;
@@ -177,7 +178,7 @@ public class XiaozhiTtsRuntime {
         var voiceSession = request.voiceSession();
         var webSocketSession = request.webSocketSession();
         var sessionId = voiceSession.sessionId();
-        var playback = new XiaozhiTtsPlayback(
+        var playback = XiaozhiTtsPlayback.streaming(
                 webSocketSession, voiceSession, codec, eventFactory, request.cancellationRequested()
         );
         var playbackGeneration = voiceSession.beginRuntimePlayback(request.expectedPlaybackGeneration());
@@ -210,8 +211,7 @@ public class XiaozhiTtsRuntime {
                 );
                 sentenceProducer.accept(sink);
                 if (!completedByProducer.get() && listener.failure() == null && !cancelled(request.cancellationRequested(), playback)) {
-                    streamingSession.complete();
-                    completedByProducer.set(true);
+                    sink.complete();
                 }
                 var failure = listener.failure();
                 if (failure != null) {
@@ -556,6 +556,7 @@ public class XiaozhiTtsRuntime {
         private final StreamingTextToSpeechSession streamingSession;
         private final ArrayList<String> sentences;
         private final AtomicBoolean completed;
+        private final StringBuilder pendingSentence = new StringBuilder();
 
         private RuntimeSentenceSink(
                 XiaozhiStreamingTtsRequest request,
@@ -580,13 +581,9 @@ public class XiaozhiTtsRuntime {
                 return;
             }
             try {
-                var accepted = false;
-                synchronized (playback) {
-                    accepted = playback.startSentence(sentence);
-                }
-                if (accepted) {
-                    sentences.add(sentence);
-                    streamingSession.sendText(sentence);
+                pendingSentence.append(sentence.trim());
+                if (shouldFlushPendingSentence()) {
+                    flushPendingSentence();
                 }
             } catch (IOException exception) {
                 throw new StreamingTtsWriteException("failed to send xiaozhi streaming tts sentence", exception);
@@ -598,7 +595,38 @@ public class XiaozhiTtsRuntime {
         @Override
         public void complete() {
             if (completed.compareAndSet(false, true)) {
-                streamingSession.complete();
+                try {
+                    flushPendingSentence();
+                    streamingSession.complete();
+                } catch (IOException exception) {
+                    throw new StreamingTtsWriteException("failed to complete xiaozhi streaming tts sentence", exception);
+                } catch (RuntimeException exception) {
+                    throw new StreamingTtsWriteException("failed to complete xiaozhi streaming tts sentence", exception);
+                }
+            }
+        }
+
+        private boolean shouldFlushPendingSentence() {
+            if (pendingSentence.length() == 0) {
+                return false;
+            }
+            var lastChar = pendingSentence.charAt(pendingSentence.length() - 1);
+            return STREAMING_STRONG_ENDINGS.indexOf(lastChar) >= 0;
+        }
+
+        private void flushPendingSentence() throws IOException {
+            if (pendingSentence.length() == 0 || cancelled(request.cancellationRequested(), playback)) {
+                return;
+            }
+            var sentence = pendingSentence.toString();
+            pendingSentence.setLength(0);
+            var accepted = false;
+            synchronized (playback) {
+                accepted = playback.startSentence(sentence);
+            }
+            if (accepted) {
+                sentences.add(sentence);
+                streamingSession.sendText(sentence);
             }
         }
     }
